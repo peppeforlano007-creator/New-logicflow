@@ -223,6 +223,19 @@ export default function RicezioneScreen() {
           return;
         }
 
+        // Check if ALL matched items are already received
+        const alreadyReceived = matched.every(item => item.extra_data?.received === 'true');
+        if (alreadyReceived) {
+          console.log('[Ricezione] Code already received:', trimmed);
+          showToast('Codice già scansionato e già in fase di lavorazione', 'error');
+          showErrorBanner('Codice già scansionato e già in fase di lavorazione');
+          setSessionLog(prev => [
+            { id: logId, code: trimmed, found: false, fileNames: [], count: 0, timestamp: new Date() },
+            ...prev.slice(0, 19),
+          ]);
+          return;
+        }
+
         // Group matched items by file
         const fileMap = new Map<string, { file: SupplierFile; items: typeof matched }>();
         for (const item of matched) {
