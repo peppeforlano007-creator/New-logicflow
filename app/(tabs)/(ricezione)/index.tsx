@@ -25,6 +25,7 @@ interface SessionLogEntry {
   id: string;
   code: string;
   found: boolean;
+  duplicate?: boolean;
   fileNames: string[];
   count: number;
   timestamp: Date;
@@ -42,31 +43,38 @@ function SessionLogRow({ entry }: { entry: SessionLogEntry }) {
   const fileNamesStr = entry.fileNames.join(', ');
   const countLabel = entry.count === 1 ? '1 articolo' : `${entry.count} articoli`;
 
+  const rowStyle = entry.found
+    ? styles.logRowFound
+    : entry.duplicate
+    ? styles.logRowDuplicate
+    : styles.logRowNotFound;
+
+  const codeStyle = entry.found
+    ? styles.logCodeFound
+    : entry.duplicate
+    ? styles.logCodeDuplicate
+    : styles.logCodeNotFound;
+
+  const icon = entry.found
+    ? <CheckCircle2 size={18} color="#16A34A" />
+    : entry.duplicate
+    ? <Clock size={18} color="#D97706" />
+    : <XCircle size={18} color="#DC2626" />;
+
+  const bottomText = entry.found
+    ? null
+    : entry.duplicate
+    ? <Text style={styles.logDuplicateText}>Già scansionato</Text>
+    : <Text style={styles.logNotFoundText}>Codice non trovato</Text>;
+
   return (
-    <View style={[styles.logRow, entry.found ? styles.logRowFound : styles.logRowNotFound]}>
-      <View style={styles.logRowIcon}>
-        {entry.found
-          ? <CheckCircle2 size={18} color="#16A34A" />
-          : <XCircle size={18} color="#DC2626" />
-        }
-      </View>
+    <View style={[styles.logRow, rowStyle]}>
+      <View style={styles.logRowIcon}>{icon}</View>
       <View style={{ flex: 1, gap: 2 }}>
-        <Text style={[styles.logCode, entry.found ? styles.logCodeFound : styles.logCodeNotFound]} numberOfLines={1}>
-          {entry.code}
-        </Text>
-        {entry.found ? (
-          <Text style={styles.logMeta} numberOfLines={1}>
-            {countLabel}
-          </Text>
-        ) : null}
-        {entry.found && fileNamesStr ? (
-          <Text style={styles.logFileName} numberOfLines={1}>
-            {fileNamesStr}
-          </Text>
-        ) : null}
-        {!entry.found ? (
-          <Text style={styles.logNotFoundText}>Codice non trovato</Text>
-        ) : null}
+        <Text style={[styles.logCode, codeStyle]} numberOfLines={1}>{entry.code}</Text>
+        {entry.found && <Text style={styles.logMeta} numberOfLines={1}>{countLabel}</Text>}
+        {entry.found && fileNamesStr ? <Text style={styles.logFileName} numberOfLines={1}>{fileNamesStr}</Text> : null}
+        {bottomText}
       </View>
       <View style={styles.logTimestamp}>
         <Clock size={11} color={COLORS.textTertiary} />
@@ -231,7 +239,7 @@ export default function RicezioneScreen() {
           showToast('Codice già scansionato e già in fase di lavorazione', 'error');
           showErrorBanner('Codice già scansionato e già in fase di lavorazione');
           setSessionLog(prev => [
-            { id: logId, code: trimmed, found: false, fileNames: [], count: 0, timestamp: new Date() },
+            { id: logId, code: trimmed, found: false, duplicate: true, fileNames: [], count: 0, timestamp: new Date() },
             ...prev.slice(0, 19),
           ]);
           return;
@@ -781,6 +789,18 @@ const styles = StyleSheet.create({
   logRowNotFound: {
     backgroundColor: '#FEE2E2',
     borderColor: '#FECACA',
+  },
+  logRowDuplicate: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FED7AA',
+  },
+  logCodeDuplicate: {
+    color: '#D97706',
+  },
+  logDuplicateText: {
+    fontSize: 12,
+    color: '#D97706',
+    fontWeight: '500',
   },
   logRowIcon: {
     marginTop: 1,
