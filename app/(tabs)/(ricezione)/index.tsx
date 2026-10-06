@@ -386,7 +386,7 @@ export default function RicezioneScreen() {
           setManualCode('');
           setTimeout(() => inputRef.current?.focus(), 50);
         }
-      }, 400);
+      }, 800);
     }
   }, [processCode]);
 
