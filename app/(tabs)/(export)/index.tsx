@@ -169,14 +169,8 @@ export default function ExportScreen() {
       const data = await response.json();
       console.log('[Export] export-supplier-file success, fileName:', data.file_name);
 
-      console.log('[Export] fetching file from URL:', data.file_url);
-      const fileResp = await fetch(data.file_url);
-      const buffer = await fileResp.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      let binary = '';
-      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-      const base64 = btoa(binary);
-      await saveAndShareFile(base64, data.file_name ?? file.file_name);
+      console.log('[Export] saving file from base64, fileName:', data.file_name ?? file.file_name);
+      await saveAndShareFile(data.file_base64, data.file_name ?? file.file_name);
       showToast(`File esportato: ${data.file_name ?? file.file_name}`, 'success');
     } catch (err: any) {
       console.error('[Export] handleExport error:', err);
@@ -207,14 +201,8 @@ export default function ExportScreen() {
       }
 
       const data = await response.json();
-      console.log('[Export] fetching merged file from URL:', data.file_url);
-      const fileResp = await fetch(data.file_url);
-      const buffer = await fileResp.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      let binary = '';
-      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-      const base64 = btoa(binary);
-      await saveAndShareFile(base64, data.file_name ?? 'export_unificato.xlsx');
+      console.log('[Export] saving merged file from base64, fileName:', data.file_name ?? 'export_unificato.csv');
+      await saveAndShareFile(data.file_base64, data.file_name ?? 'export_unificato.csv');
       showToast(`File unificato esportato: ${data.file_name}`, 'success');
       setSelectedIds(new Set());
     } catch (err: any) {
