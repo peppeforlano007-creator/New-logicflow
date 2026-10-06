@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '@/constants/AppColors';
 import { Check, AlertCircle, X } from 'lucide-react-native';
 
-export type ToastType = 'success' | 'error' | 'info';
+export type ToastType = 'success' | 'error' | 'info' | 'warning';
 
 interface ToastMessageProps {
   message: string;
@@ -65,9 +65,10 @@ export function ToastMessage({
   const bgColor =
     type === 'success' ? COLORS.accent :
     type === 'error' ? COLORS.danger :
+    type === 'warning' ? COLORS.warning :
     COLORS.primary;
 
-  const Icon = type === 'success' ? Check : type === 'error' ? X : AlertCircle;
+  const Icon = type === 'success' ? Check : type === 'error' ? X : type === 'warning' ? AlertCircle : AlertCircle;
 
   return (
     <Animated.View

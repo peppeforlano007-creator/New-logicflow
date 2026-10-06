@@ -96,6 +96,7 @@ export default function RicezioneScreen() {
   const [manualCode, setManualCode] = useState('');
   const [sessionLog, setSessionLog] = useState<SessionLogEntry[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [bannerType, setBannerType] = useState<'error' | 'warning'>('error');
   const [selectedColumn, setSelectedColumn] = useState<'PkgID' | 'LPN'>('PkgID');
   const errorBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -179,6 +180,19 @@ export default function RicezioneScreen() {
   // ── Error banner ───────────────────────────────────────────────────────────
 
   const showErrorBanner = useCallback((msg: string) => {
+    setBannerType('error');
+    setErrorBanner(msg);
+    Animated.timing(bannerOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    if (errorBannerTimer.current) clearTimeout(errorBannerTimer.current);
+    errorBannerTimer.current = setTimeout(() => {
+      Animated.timing(bannerOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+        setErrorBanner(null);
+      });
+    }, 3000);
+  }, [bannerOpacity]);
+
+  const showWarningBanner = useCallback((msg: string) => {
+    setBannerType('warning');
     setErrorBanner(msg);
     Animated.timing(bannerOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
     if (errorBannerTimer.current) clearTimeout(errorBannerTimer.current);
@@ -236,8 +250,8 @@ export default function RicezioneScreen() {
         const alreadyReceived = matched.every(item => item.extra_data?.received === 'true');
         if (alreadyReceived) {
           console.log('[Ricezione] Code already received:', trimmed);
-          showToast('Codice già scansionato e già in fase di lavorazione', 'error');
-          showErrorBanner('Codice già scansionato e già in fase di lavorazione');
+          showToast('Codice già scansionato e già in fase di lavorazione', 'warning');
+          showWarningBanner('Codice già scansionato e già in fase di lavorazione');
           setSessionLog(prev => [
             { id: logId, code: trimmed, found: false, duplicate: true, fileNames: [], count: 0, timestamp: new Date() },
             ...prev.slice(0, 19),
@@ -341,7 +355,7 @@ export default function RicezioneScreen() {
         setProcessingCode(false);
       }
     },
-    [activeFiles, processingCode, selectedColumn, showToast, showErrorBanner],
+    [activeFiles, processingCode, selectedColumn, showToast, showErrorBanner, showWarningBanner],
   );
 
   const handleScanned = useCallback(
@@ -493,9 +507,15 @@ export default function RicezioneScreen() {
 
           {/* Error banner */}
           {errorBanner ? (
-            <Animated.View style={[styles.errorBanner, { opacity: bannerOpacity }]}>
-              <XCircle size={16} color="#DC2626" />
-              <Text style={styles.errorBannerText}>{errorBanner}</Text>
+            <Animated.View style={[
+              styles.errorBanner,
+              bannerType === 'warning' ? styles.warningBanner : undefined,
+              { opacity: bannerOpacity },
+            ]}>
+              <XCircle size={16} color={bannerType === 'warning' ? '#D97706' : '#DC2626'} />
+              <Text style={[styles.errorBannerText, bannerType === 'warning' ? styles.warningBannerText : undefined]}>
+                {errorBanner}
+              </Text>
             </Animated.View>
           ) : null}
 
@@ -732,6 +752,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     flex: 1,
+  },
+  warningBanner: {
+    backgroundColor: '#FFF7ED',
+    borderColor: '#FED7AA',
+  },
+  warningBannerText: {
+    color: '#D97706',
   },
 
   // Manual input row
