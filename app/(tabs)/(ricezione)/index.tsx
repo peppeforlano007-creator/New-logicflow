@@ -91,6 +91,7 @@ export default function RicezioneScreen() {
   const [selectedColumn, setSelectedColumn] = useState<'PkgID' | 'LPN'>('PkgID');
   const errorBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastKeyTimeRef = useRef<number>(0);
   const bannerOpacity = useRef(new Animated.Value(0)).current;
   const inputRef = useRef<TextInput>(null);
 
@@ -345,13 +346,17 @@ export default function RicezioneScreen() {
   );
 
   const handleManualCodeChange = useCallback((text: string) => {
+    const now = Date.now();
+    const timeSinceLast = now - lastKeyTimeRef.current;
+    lastKeyTimeRef.current = now;
+
     setManualCode(text);
-    // Clear any pending debounce timer
     if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    // Only auto-process if text is non-empty (BT reader flow)
-    if (text.trim().length > 0) {
+
+    // Only auto-process if characters are arriving fast (BT reader: <80ms between chars)
+    // For manual keyboard typing (>80ms between chars), wait for "Cerca" or Enter
+    if (text.trim().length > 0 && timeSinceLast < 80) {
       debounceTimerRef.current = setTimeout(() => {
-        // At this point the BT reader has finished sending all chars
         const finalCode = text.trim();
         if (finalCode) {
           console.log('[Ricezione] BT debounce fired, processing code:', finalCode);
