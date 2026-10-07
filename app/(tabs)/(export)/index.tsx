@@ -61,25 +61,52 @@ export default function ExportScreen() {
   const fetchFiles = useCallback(async () => {
     console.log('[Export] fetchFiles called');
     try {
-      const { data, error } = await db
+      // Flat query — no nested embed, no row-limit truncation
+      const { data: filesData, error: filesError } = await db
         .from('supplier_files')
-        .select('*, supplier_items(status)')
+        .select('id, file_name, original_format, status, extra_columns, column_headers, imported_at, received_at, completed_at, imported_by, notes')
         .order('imported_at', { ascending: false });
 
-      if (error) {
-        console.error('[Export] fetchFiles error:', error);
-        throw error;
+      if (filesError) {
+        console.error('[Export] fetchFiles files error:', filesError);
+        throw filesError;
       }
 
-      console.log('[Export] fetchFiles success, count:', data?.length);
-      const mapped: FileWithProgress[] = (data || []).map((f: any) => {
-        const items: { status: string }[] = f.supplier_items ?? [];
-        return {
-          ...f,
-          total_items: items.length,
-          completed_items: items.filter(i => i.status === 'completed').length,
+      const fileList = filesData ?? [];
+      console.log('[Export] fetchFiles files loaded:', fileList.length);
+
+      if (fileList.length === 0) {
+        setFiles([]);
+        return;
+      }
+
+      // Accurate counts from aggregate view (no row-limit issues)
+      const fileIds = fileList.map((f: any) => f.id);
+      const { data: countsData, error: countsError } = await db
+        .from('supplier_file_progress')
+        .select('file_id, total_items, completed_items')
+        .in('file_id', fileIds);
+
+      if (countsError) {
+        console.error('[Export] fetchFiles counts error:', countsError);
+        throw countsError;
+      }
+
+      const countsMap: Record<string, { total_items: number; completed_items: number }> = {};
+      for (const row of (countsData ?? [])) {
+        countsMap[row.file_id] = {
+          total_items: Number(row.total_items ?? 0),
+          completed_items: Number(row.completed_items ?? 0),
         };
-      });
+      }
+
+      const mapped: FileWithProgress[] = fileList.map((f: any) => ({
+        ...f,
+        total_items: countsMap[f.id]?.total_items ?? 0,
+        completed_items: countsMap[f.id]?.completed_items ?? 0,
+      }));
+
+      console.log('[Export] fetchFiles mapped:', mapped.length, 'files with counts');
       setFiles(mapped);
     } catch (err) {
       console.error('[Export] fetchFiles exception:', err);
