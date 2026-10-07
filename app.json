@@ -30,7 +30,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/images/newly.png",
+      "favicon": "./assets/images/app-icon-nst.png",
       "bundler": "metro"
     },
     "plugins": [
