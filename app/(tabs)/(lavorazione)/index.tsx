@@ -60,6 +60,10 @@ export default function LavorazioneScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [scannerVisible, setScannerVisible] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep a ref to items so the debounce callback always reads the latest value
+  const itemsRef = useRef<ItemWithFile[]>([]);
+  const selectedColumnRef = useRef<ToggleColumn>('PkgID');
 
 
   // ── Data fetching ────────────────────────────────────────────────────────
@@ -85,6 +89,7 @@ export default function LavorazioneScreen() {
         return 1;
       });
       setItems(sorted);
+      itemsRef.current = sorted;
     } catch (err) {
       console.error('[Lavorazione] fetchItems exception:', err);
     } finally {
@@ -128,14 +133,38 @@ export default function LavorazioneScreen() {
 
   const handleToggle = useCallback((col: ToggleColumn) => {
     console.log('[Lavorazione] toggle column:', col);
+    selectedColumnRef.current = col;
     setSelectedColumn(col);
     setSearchQuery('');
   }, []);
 
+  const navigateIfSingleMatch = useCallback((code: string, col: ToggleColumn) => {
+    const trimmed = code.trim();
+    if (!trimmed) return;
+    const currentItems = itemsRef.current;
+    const matches = currentItems.filter(item => {
+      const value = String(item.original_data?.[col] ?? '');
+      return value.toLowerCase().includes(trimmed.toLowerCase());
+    });
+    console.log('[Lavorazione] debounce/submit — matches:', matches.length, 'for code:', trimmed, '| column:', col);
+    if (matches.length === 1) {
+      console.log('[Lavorazione] single match — navigating to item:', matches[0].id);
+      router.push(`/item/${matches[0].id}` as any);
+      setSearchQuery('');
+      setTimeout(() => searchInputRef.current?.focus(), 100);
+    }
+  }, [router]);
+
   const handleSearchChange = useCallback((text: string) => {
     console.log('[Lavorazione] search query changed:', text);
     setSearchQuery(text);
-  }, []);
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    if (text.trim().length > 0) {
+      debounceTimerRef.current = setTimeout(() => {
+        navigateIfSingleMatch(text, selectedColumnRef.current);
+      }, 600);
+    }
+  }, [navigateIfSingleMatch]);
 
   const handleItemPress = useCallback((item: ItemWithFile) => {
     const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
@@ -325,6 +354,15 @@ export default function LavorazioneScreen() {
             autoCapitalize="none"
             clearButtonMode="while-editing"
             autoFocus
+            returnKeyType="search"
+            onSubmitEditing={() => {
+              console.log('[Lavorazione] onSubmitEditing — immediate search for:', searchQuery);
+              if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+              navigateIfSingleMatch(searchQuery, selectedColumnRef.current);
+            }}
+            onBlur={() => {
+              setTimeout(() => searchInputRef.current?.focus(), 100);
+            }}
           />
         </View>
         <AnimatedPressable onPress={() => { console.log('[Lavorazione] scanner button pressed'); setScannerVisible(true); }}>
@@ -401,9 +439,11 @@ export default function LavorazioneScreen() {
         visible={scannerVisible}
         onClose={() => setScannerVisible(false)}
         onScanned={(code) => {
-          console.log('[Lavorazione] barcode scanned:', code);
-          setSearchQuery(code);
+          console.log('[Lavorazione] barcode scanned from camera:', code);
           setScannerVisible(false);
+          setSearchQuery(code);
+          // Attempt immediate navigation if single match
+          setTimeout(() => navigateIfSingleMatch(code, selectedColumnRef.current), 50);
         }}
         hint="Scansiona il codice articolo"
       />

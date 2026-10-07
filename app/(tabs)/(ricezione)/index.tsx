@@ -359,6 +359,8 @@ export default function RicezioneScreen() {
         showToast(err?.message ?? 'Errore durante la scansione', 'error');
       } finally {
         setProcessingCode(false);
+        // Re-focus input after processing so USB/BT scanner can immediately send next code
+        setTimeout(() => inputRef.current?.focus(), 100);
       }
     },
     [activeFiles, processingCode, selectedColumn, showToast, showErrorBanner, showWarningBanner],
@@ -425,7 +427,14 @@ export default function RicezioneScreen() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <View style={{ flex: 1, backgroundColor: COLORS.background }}>
+    <View
+      style={{ flex: 1, backgroundColor: COLORS.background }}
+      // Re-focus the hidden input when tapping the background (web USB/BT scanner support)
+      onStartShouldSetResponder={() => {
+        setTimeout(() => inputRef.current?.focus(), 50);
+        return false;
+      }}
+    >
       <Stack.Screen options={{ title: 'Ricezione' }} />
 
       {loading ? (
@@ -531,6 +540,9 @@ export default function RicezioneScreen() {
               returnKeyType="search"
               autoCapitalize="none"
               autoCorrect={false}
+              onBlur={() => {
+                setTimeout(() => inputRef.current?.focus(), 100);
+              }}
             />
             <TouchableOpacity
               style={[styles.manualSearchBtn, !manualCode.trim() && { opacity: 0.4 }]}
