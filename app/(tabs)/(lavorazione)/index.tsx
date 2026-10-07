@@ -360,9 +360,7 @@ export default function LavorazioneScreen() {
               if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
               navigateIfSingleMatch(searchQuery, selectedColumnRef.current);
             }}
-            onBlur={() => {
-              setTimeout(() => searchInputRef.current?.focus(), 100);
-            }}
+
           />
         </View>
         <AnimatedPressable onPress={() => { console.log('[Lavorazione] scanner button pressed'); setScannerVisible(true); }}>
