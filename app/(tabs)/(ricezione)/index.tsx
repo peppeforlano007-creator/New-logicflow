@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -174,8 +174,15 @@ export default function RicezioneScreen() {
     useCallback(() => {
       console.log('[Ricezione] Tab focused — reloading active files');
       loadActiveFiles();
+      const t = setTimeout(() => inputRef.current?.focus(), 300);
+      return () => clearTimeout(t);
     }, [loadActiveFiles]),
   );
+
+  useEffect(() => {
+    const t = setTimeout(() => inputRef.current?.focus(), 300);
+    return () => clearTimeout(t);
+  }, []);
 
   // ── Error banner ───────────────────────────────────────────────────────────
 
@@ -532,7 +539,6 @@ export default function RicezioneScreen() {
               returnKeyType="search"
               autoCapitalize="none"
               autoCorrect={false}
-              autoFocus
             />
             <TouchableOpacity
               style={[styles.manualSearchBtn, !manualCode.trim() && { opacity: 0.4 }]}
