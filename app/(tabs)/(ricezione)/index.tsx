@@ -427,14 +427,7 @@ export default function RicezioneScreen() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <View
-      style={{ flex: 1, backgroundColor: COLORS.background }}
-      // Re-focus the hidden input when tapping the background (web USB/BT scanner support)
-      onStartShouldSetResponder={() => {
-        setTimeout(() => inputRef.current?.focus(), 50);
-        return false;
-      }}
-    >
+    <View style={{ flex: 1, backgroundColor: COLORS.background }}>
       <Stack.Screen options={{ title: 'Ricezione' }} />
 
       {loading ? (
@@ -540,9 +533,6 @@ export default function RicezioneScreen() {
               returnKeyType="search"
               autoCapitalize="none"
               autoCorrect={false}
-              onBlur={() => {
-                setTimeout(() => inputRef.current?.focus(), 100);
-              }}
             />
             <TouchableOpacity
               style={[styles.manualSearchBtn, !manualCode.trim() && { opacity: 0.4 }]}
