@@ -272,7 +272,7 @@ export default function ItemDetailScreen() {
         if (mergedLottoCodice && lottiList.length > 0) {
           const found = lottiList.find(l => l.codice_lotto === mergedLottoCodice) ?? null;
           setSelectedLotto(found);
-          setSelectedLottoId(found?.id ?? mergedLottoId || null);
+          setSelectedLottoId((found?.id ?? mergedLottoId) || null);
         } else if (mergedLottoId) {
           setSelectedLottoId(mergedLottoId);
         }
