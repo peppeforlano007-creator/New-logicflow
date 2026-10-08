@@ -44,7 +44,7 @@ const SELEZIONE_OPTIONS = [
 type Lotto = {
   id: string;
   codice_lotto: string;
-  descrizione: string | null;
+  note: string | null;
   stato: string;
 };
 
@@ -163,7 +163,7 @@ export default function ItemDetailScreen() {
     console.log('[ItemDetail] fetchLotti called');
     const { data, error } = await db
       .from('lotti')
-      .select('id, codice_lotto, descrizione, stato')
+      .select('id, codice_lotto, note, stato')
       .in('stato', ['magazzino', 'caricato'])
       .order('created_at', { ascending: false });
     if (error) {
@@ -415,12 +415,12 @@ export default function ItemDetailScreen() {
     ? lotti
     : lotti.filter(l =>
         l.codice_lotto.toLowerCase().includes(lottoSearchLower) ||
-        (l.descrizione ?? '').toLowerCase().includes(lottoSearchLower)
+        (l.note ?? '').toLowerCase().includes(lottoSearchLower)
       );
 
   // Display values for lotto selector button
   const lottoButtonLabel = selectedLotto ? selectedLotto.codice_lotto : 'Seleziona lotto...';
-  const lottoButtonDesc = selectedLotto?.descrizione ?? null;
+  const lottoButtonDesc = selectedLotto?.note ?? null;
   const lottoButtonIsPlaceholder = !selectedLotto;
 
   if (loading) {
@@ -1193,9 +1193,9 @@ export default function ItemDetailScreen() {
                       <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }}>
                         {lotto.codice_lotto}
                       </Text>
-                      {lotto.descrizione ? (
+                      {lotto.note ? (
                         <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>
-                          {lotto.descrizione}
+                          {lotto.note}
                         </Text>
                       ) : null}
                     </View>
