@@ -305,9 +305,9 @@ export default function CassaScreen() {
     const buoniVal = toNum(buoni);
     const restituitiVal = toNum(restituiti);
 
-    // Totale operatore = POS + Contanti - Spese - Sconti - Buoni - Restituiti
-    const totaleOperatore = pos + contanti - speseVal - scontiVal - buoniVal - restituitiVal;
-    const diff = totaleOperatore - totaleGiornaliero;
+    // Totale operatore = POS + Contanti + Spese + Sconti + Buoni + Restituiti
+    const totaleOperatore = pos + contanti + speseVal + scontiVal + buoniVal + restituitiVal;
+    const diff = totaleGiornaliero - totaleOperatore;
 
     console.log('[Cassa] Conferma Chiusura pressed — pos:', pos, 'contanti:', contanti, 'spese:', speseVal, 'sconti:', scontiVal, 'buoni:', buoniVal, 'restituiti:', restituitiVal, 'totaleOperatore:', totaleOperatore, 'diff:', diff, 'storeId:', storeId);
 
@@ -651,8 +651,8 @@ export default function CassaScreen() {
             {/* Totale operatore calcolato in tempo reale */}
             {(() => {
               const toNum = (v: string) => Number(v.replace(',', '.')) || 0;
-              const totOp = toNum(incassatoPos) + toNum(incassatoContanti) - toNum(spese) - toNum(scontiCassa) - toNum(buoni) - toNum(restituiti);
-              const diff = totOp - totaleGiornaliero;
+              const totOp = toNum(incassatoPos) + toNum(incassatoContanti) + toNum(spese) + toNum(scontiCassa) + toNum(buoni) + toNum(restituiti);
+              const diff = totaleGiornaliero - totOp;
               const isOk = Math.abs(diff) < 0.01;
               const isPos = diff > 0.01;
               return (
