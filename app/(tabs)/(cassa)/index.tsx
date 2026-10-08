@@ -301,15 +301,12 @@ export default function CassaScreen() {
     setChiusuraError(null);
     try {
       const insertPayload: Record<string, unknown> = {
-        totale_calcolato: totaleGiornaliero,
+        store_id: storeId,
+        data: new Date().toISOString().split('T')[0],
+        venduto_calcolato: totaleGiornaliero,
         incassato_operatore: incassato,
-        operatore: user?.username ?? null,
-        data_chiusura: new Date().toISOString().split('T')[0],
+        differenza: incassato - totaleGiornaliero,
       };
-      // Aggiunge store_id solo se disponibile (la colonna potrebbe non esistere ancora)
-      if (storeId) {
-        insertPayload.store_id = storeId;
-      }
 
       const { error } = await db.from('chiusure_cassa').insert(insertPayload);
       if (error) {
