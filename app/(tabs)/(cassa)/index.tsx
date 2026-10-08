@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { Stack } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { Camera, ShoppingCart, Trash2, CheckCircle, X, DollarSign, Package, Store } from 'lucide-react-native';
+import { Camera, ShoppingCart, Trash2, CheckCircle, X, DollarSign, Package, Store, List } from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
 import { ScannerModal } from '@/components/ScannerModal';
@@ -19,6 +19,16 @@ import { db } from '@/utils/db';
 import { useAuth } from '@/contexts/AuthContext';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+interface SfogliaItem {
+  id: string;
+  item_code: string;
+  identifier: string;
+  desc: string;
+  prezzo: number;
+  lotto_id: string | null;
+  lotto_codice: string;
+}
 
 interface CartItem {
   id: string;
@@ -73,6 +83,12 @@ export default function CassaScreen() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+
+  // Sfoglia articoli modal
+  const [showSfogliaModal, setShowSfogliaModal] = useState(false);
+  const [sfogliaItems, setSfogliaItems] = useState<SfogliaItem[]>([]);
+  const [sfogliaLoading, setSfogliaLoading] = useState(false);
+  const [sfogliaFilter, setSfogliaFilter] = useState('');
 
   // Chiusura cassa modal
   const [showChiusuraModal, setShowChiusuraModal] = useState(false);
@@ -137,6 +153,73 @@ export default function CassaScreen() {
       loadStoreAssignment();
     }, [loadStoreAssignment])
   );
+
+  // ── Load sfoglia items ─────────────────────────────────────────────────────
+
+  const loadSfogliaItems = useCallback(async () => {
+    if (!storeId) return;
+    console.log('[Cassa] loadSfogliaItems — storeId:', storeId);
+    setSfogliaLoading(true);
+    try {
+      const { data: lottiData } = await db
+        .from('lotti')
+        .select('id, codice_lotto')
+        .eq('store_id', storeId)
+        .eq('stato', 'caricato');
+
+      const lottiIds = (lottiData ?? []).map((l: { id: string }) => l.id);
+      if (lottiIds.length === 0) { setSfogliaItems([]); return; }
+
+      const lottiMap: Record<string, string> = {};
+      (lottiData ?? []).forEach((l: { id: string; codice_lotto: string }) => { lottiMap[l.id] = l.codice_lotto; });
+
+      const { data: items } = await db
+        .from('supplier_items')
+        .select('id, item_code, original_data, extra_data, lotto_id')
+        .in('lotto_id', lottiIds);
+
+      const { data: venduti } = await db
+        .from('movimenti')
+        .select('articolo_id')
+        .eq('store_id', storeId)
+        .eq('tipo', 'vendita');
+
+      const vendutiIds = new Set((venduti ?? []).map((v: { articolo_id: string }) => v.articolo_id));
+
+      const result: SfogliaItem[] = ((items ?? []) as { id: string; item_code: string; original_data: Record<string, string>; extra_data: Record<string, unknown>; lotto_id: string | null }[])
+        .filter(item => !vendutiIds.has(item.id))
+        .map(item => {
+          const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
+          const descKey = Object.keys(item.original_data ?? {}).find((k: string) => k.toLowerCase() === 'itemdesc');
+          const desc = descKey ? ((item.original_data ?? {})[descKey] || '—') : '—';
+          const prezzo = extractPrezzo(item.extra_data ?? {});
+          const lotto_codice = item.lotto_id ? (lottiMap[item.lotto_id] ?? '—') : '—';
+          return { id: item.id, item_code: item.item_code, identifier, desc, prezzo, lotto_id: item.lotto_id, lotto_codice };
+        });
+
+      console.log('[Cassa] sfoglia loaded — items:', result.length);
+      setSfogliaItems(result);
+    } catch (err) {
+      console.error('[Cassa] loadSfogliaItems error:', err);
+    } finally {
+      setSfogliaLoading(false);
+    }
+  }, [storeId]);
+
+  // ── Sfoglia select ─────────────────────────────────────────────────────────
+
+  const handleSfogliaSelect = useCallback((item: SfogliaItem) => {
+    if (cart.some(i => i.id === item.id)) {
+      setSearchError(`Articolo già nel carrello: ${item.identifier}`);
+      setShowSfogliaModal(false);
+      return;
+    }
+    const newItem: CartItem = { id: item.id, item_code: item.item_code, identifier: item.identifier, desc: item.desc, prezzo: item.prezzo, lotto_id: item.lotto_id };
+    console.log('[Cassa] sfoglia item selected:', item.identifier);
+    setCart(prev => [newItem, ...prev]);
+    setShowSfogliaModal(false);
+    setSfogliaFilter('');
+  }, [cart]);
 
   // ── Lookup item ────────────────────────────────────────────────────────────
 
@@ -483,6 +566,20 @@ export default function CassaScreen() {
                   }
                 </View>
               </AnimatedPressable>
+              <AnimatedPressable onPress={() => {
+                console.log('[Cassa] sfoglia button pressed');
+                setSfogliaFilter('');
+                loadSfogliaItems();
+                setShowSfogliaModal(true);
+              }}>
+                <View style={{
+                  width: 48, height: 48, borderRadius: 12,
+                  backgroundColor: COLORS.surfaceSecondary, alignItems: 'center', justifyContent: 'center',
+                  borderWidth: 1, borderColor: COLORS.border,
+                }}>
+                  <List size={22} color={COLORS.textSecondary} />
+                </View>
+              </AnimatedPressable>
             </View>
 
             {searchError ? (
@@ -595,6 +692,83 @@ export default function CassaScreen() {
         }}
         hint="Scansiona il barcode dell'articolo"
       />
+
+      {/* Sfoglia Articoli Modal */}
+      <Modal visible={showSfogliaModal} animationType="slide" presentationStyle="pageSheet">
+        <View style={{ flex: 1, backgroundColor: COLORS.background }}>
+          {/* Header */}
+          <View style={{
+            flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+            paddingHorizontal: 20, paddingVertical: 16,
+            backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border,
+          }}>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: COLORS.text }}>Sfoglia Articoli</Text>
+            <AnimatedPressable onPress={() => { setShowSfogliaModal(false); setSfogliaFilter(''); }}>
+              <View style={{ padding: 4 }}>
+                <X size={22} color={COLORS.textSecondary} />
+              </View>
+            </AnimatedPressable>
+          </View>
+
+          {/* Search bar */}
+          <View style={{ paddingHorizontal: 16, paddingVertical: 12, backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border }}>
+            <TextInput
+              value={sfogliaFilter}
+              onChangeText={setSfogliaFilter}
+              placeholder="Cerca per descrizione o codice..."
+              placeholderTextColor={COLORS.textTertiary}
+              style={{ backgroundColor: COLORS.surfaceSecondary, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 11, fontSize: 14, color: COLORS.text, borderWidth: 1, borderColor: COLORS.border }}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+          </View>
+
+          {sfogliaLoading ? (
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator size="large" color={COLORS.primary} />
+            </View>
+          ) : (
+            <FlatList
+              data={sfogliaItems.filter(item => {
+                if (!sfogliaFilter.trim()) return true;
+                const q = sfogliaFilter.toLowerCase();
+                return item.desc.toLowerCase().includes(q) || item.identifier.toLowerCase().includes(q) || item.item_code.toLowerCase().includes(q) || item.lotto_codice.toLowerCase().includes(q);
+              })}
+              keyExtractor={item => item.id}
+              contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
+              ListEmptyComponent={
+                <View style={{ alignItems: 'center', paddingTop: 40 }}>
+                  <Package size={32} color={COLORS.textTertiary} />
+                  <Text style={{ fontSize: 15, fontWeight: '600', color: COLORS.textSecondary, marginTop: 12 }}>Nessun articolo disponibile</Text>
+                </View>
+              }
+              renderItem={({ item }) => {
+                const prezzoLabel = formatCurrency(item.prezzo);
+                const alreadyInCart = cart.some(c => c.id === item.id);
+                const descLabel = item.desc !== '—' ? item.desc : item.identifier;
+                const subLabel = `${item.identifier} · ${item.lotto_codice}`;
+                return (
+                  <AnimatedPressable onPress={() => !alreadyInCart && handleSfogliaSelect(item)} style={{ opacity: alreadyInCart ? 0.4 : 1 }}>
+                    <View style={{
+                      backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, marginBottom: 8,
+                      borderWidth: 1, borderColor: COLORS.border, flexDirection: 'row', alignItems: 'center', gap: 10,
+                    }}>
+                      <View style={{ width: 36, height: 36, borderRadius: 9, backgroundColor: COLORS.primaryMuted, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                        <Package size={16} color={COLORS.primary} />
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>{descLabel}</Text>
+                        <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>{subLabel}</Text>
+                      </View>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.primary }}>{prezzoLabel}</Text>
+                    </View>
+                  </AnimatedPressable>
+                );
+              }}
+            />
+          )}
+        </View>
+      </Modal>
 
       {/* Chiusura Cassa Modal */}
       <Modal visible={showChiusuraModal} animationType="slide" presentationStyle="pageSheet">
