@@ -8,10 +8,11 @@ import {
   Alert,
   Modal,
   ScrollView,
+  TouchableOpacity,
 } from 'react-native';
 import { Stack } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { Camera, ShoppingCart, Trash2, CheckCircle, X, DollarSign, Package, Store, List } from 'lucide-react-native';
+import { Camera, ShoppingCart, Trash2, CheckCircle, X, DollarSign, Package, Store, List, Minus, Plus } from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
 import { ScannerModal } from '@/components/ScannerModal';
@@ -28,6 +29,7 @@ interface SfogliaItem {
   prezzo: number;
   lotto_id: string | null;
   lotto_codice: string;
+  quantita_disponibile: number;
 }
 
 interface CartItem {
@@ -37,6 +39,9 @@ interface CartItem {
   desc: string;
   prezzo: number;
   lotto_id: string | null;
+  quantita: number;
+  quantita_disponibile: number;
+  status: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -106,7 +111,7 @@ export default function CassaScreen() {
 
   // ── Totale con sconto ───────────────────────────────────────────────────────
 
-  const totaleOriginale = cart.reduce((sum, item) => sum + item.prezzo, 0);
+  const totaleOriginale = cart.reduce((sum, item) => sum + item.prezzo * item.quantita, 0);
   const totaleCarrello = scontoPercentuale > 0
     ? totaleOriginale * (1 - scontoPercentuale / 100)
     : totaleOriginale;
@@ -175,29 +180,32 @@ export default function CassaScreen() {
 
       const { data: items } = await db
         .from('supplier_items')
-        .select('id, item_code, original_data, extra_data, lotto_id')
+        .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
         .in('lotto_id', lottiIds);
 
-      const { data: venduti } = await db
-        .from('movimenti')
-        .select('articolo_id')
-        .eq('store_id', storeId)
-        .eq('tipo', 'vendita');
+      console.log('[Cassa] sfoglia raw items loaded:', items?.length ?? 0);
 
-      const vendutiIds = new Set((venduti ?? []).map((v: { articolo_id: string }) => v.articolo_id));
-
-      const result: SfogliaItem[] = ((items ?? []) as { id: string; item_code: string; original_data: Record<string, string>; extra_data: Record<string, unknown>; lotto_id: string | null }[])
-        .filter(item => !vendutiIds.has(item.id))
+      const result: SfogliaItem[] = ((items ?? []) as {
+        id: string;
+        item_code: string;
+        original_data: Record<string, string>;
+        extra_data: Record<string, unknown>;
+        lotto_id: string | null;
+        status: string;
+        quantita_disponibile: number | null;
+      }[])
+        .filter(item => (item.quantita_disponibile ?? 1) > 0)
         .map(item => {
           const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
           const descKey = Object.keys(item.original_data ?? {}).find((k: string) => k.toLowerCase() === 'itemdesc');
           const desc = descKey ? ((item.original_data ?? {})[descKey] || '—') : '—';
           const prezzo = extractPrezzo(item.extra_data ?? {});
           const lotto_codice = item.lotto_id ? (lottiMap[item.lotto_id] ?? '—') : '—';
-          return { id: item.id, item_code: item.item_code, identifier, desc, prezzo, lotto_id: item.lotto_id, lotto_codice };
+          const qtaDisp = item.quantita_disponibile ?? 1;
+          return { id: item.id, item_code: item.item_code, identifier, desc, prezzo, lotto_id: item.lotto_id, lotto_codice, quantita_disponibile: qtaDisp };
         });
 
-      console.log('[Cassa] sfoglia loaded — items:', result.length);
+      console.log('[Cassa] sfoglia loaded — items disponibili:', result.length);
       setSfogliaItems(result);
     } catch (err) {
       console.error('[Cassa] loadSfogliaItems error:', err);
@@ -214,8 +222,18 @@ export default function CassaScreen() {
       setShowSfogliaModal(false);
       return;
     }
-    const newItem: CartItem = { id: item.id, item_code: item.item_code, identifier: item.identifier, desc: item.desc, prezzo: item.prezzo, lotto_id: item.lotto_id };
-    console.log('[Cassa] sfoglia item selected:', item.identifier);
+    const newItem: CartItem = {
+      id: item.id,
+      item_code: item.item_code,
+      identifier: item.identifier,
+      desc: item.desc,
+      prezzo: item.prezzo,
+      lotto_id: item.lotto_id,
+      quantita: 1,
+      quantita_disponibile: item.quantita_disponibile,
+      status: 'processing',
+    };
+    console.log('[Cassa] sfoglia item selected:', item.identifier, 'qtaDisp:', item.quantita_disponibile);
     setCart(prev => [newItem, ...prev]);
     setShowSfogliaModal(false);
     setSfogliaFilter('');
@@ -232,7 +250,7 @@ export default function CassaScreen() {
     try {
       const { data, error } = await db
         .from('supplier_items')
-        .select('id, item_code, original_data, extra_data, lotto_id')
+        .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
         .or(`item_code.eq.${trimmed},original_data->>LPN.eq.${trimmed},extra_data->>SKU.eq.${trimmed}`)
         .limit(1)
         .single();
@@ -240,6 +258,16 @@ export default function CassaScreen() {
       if (error || !data) {
         console.log('[Cassa] item not found for code:', trimmed);
         setSearchError(`Articolo non trovato: ${trimmed}`);
+        return;
+      }
+
+      const qtaDisp = (data as any).quantita_disponibile ?? 1;
+      console.log('[Cassa] item found — id:', data.id, 'quantita_disponibile:', qtaDisp);
+
+      // Verifica disponibilità tramite quantita_disponibile
+      if (qtaDisp <= 0) {
+        console.log('[Cassa] item not available (quantita_disponibile <= 0):', data.id);
+        setSearchError(`Articolo non disponibile (esaurito)`);
         return;
       }
 
@@ -286,8 +314,18 @@ export default function CassaScreen() {
         return;
       }
 
-      const newItem: CartItem = { id: data.id, item_code: data.item_code, identifier, desc, prezzo, lotto_id: data.lotto_id ?? null };
-      console.log('[Cassa] item added to cart:', identifier, 'prezzo:', prezzo);
+      const newItem: CartItem = {
+        id: data.id,
+        item_code: data.item_code,
+        identifier,
+        desc,
+        prezzo,
+        lotto_id: data.lotto_id ?? null,
+        quantita: 1,
+        quantita_disponibile: qtaDisp,
+        status: (data as any).status ?? 'processing',
+      };
+      console.log('[Cassa] item added to cart:', identifier, 'prezzo:', prezzo, 'qtaDisp:', qtaDisp);
       setCart(prev => [newItem, ...prev]);
       setSearchQuery('');
     } catch (err) {
@@ -297,6 +335,17 @@ export default function CassaScreen() {
       setSearching(false);
     }
   }, [cart, storeId]);
+
+  // ── Change quantity in cart ────────────────────────────────────────────────
+
+  const handleChangeQty = useCallback((id: string, delta: number) => {
+    setCart(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const newQty = Math.max(1, Math.min(item.quantita + delta, item.quantita_disponibile));
+      console.log('[Cassa] handleChangeQty — id:', id, 'delta:', delta, 'newQty:', newQty, 'qtaDisp:', item.quantita_disponibile);
+      return { ...item, quantita: newQty };
+    }));
+  }, []);
 
   // ── Remove from cart ───────────────────────────────────────────────────────
 
@@ -316,24 +365,38 @@ export default function CassaScreen() {
     setConfirming(true);
     try {
       const prezzoUnitarioMoltiplicatore = scontoPercentuale > 0 ? (1 - scontoPercentuale / 100) : 1;
+
+      // Insert movimenti with quantita
       const movimenti = cart.map(item => ({
         articolo_id: item.id,
         store_id: storeId,
         lotto_id: item.lotto_id ?? null,
         tipo: 'vendita',
         prezzo: item.prezzo * prezzoUnitarioMoltiplicatore,
+        quantita: item.quantita,
       }));
+      console.log('[Cassa] inserting movimenti:', movimenti.length, 'total units:', cart.reduce((s, i) => s + i.quantita, 0));
       const { error: movErr } = await db.from('movimenti').insert(movimenti);
       if (movErr) throw movErr;
 
-      // Update item status to sold
-      const ids = cart.map(i => i.id);
-      await db.from('supplier_items').update({ status: 'completed' }).in('id', ids);
+      // Update quantita_disponibile for each item and set status if exhausted
+      for (const item of cart) {
+        const newQtaDisp = item.quantita_disponibile - item.quantita;
+        const newStatus = newQtaDisp <= 0 ? 'completed' : item.status;
+        console.log('[Cassa] updating supplier_item:', item.id, 'quantita_disponibile:', newQtaDisp, 'status:', newStatus);
+        await db.from('supplier_items')
+          .update({
+            quantita_disponibile: newQtaDisp,
+            status: newStatus,
+          })
+          .eq('id', item.id);
+      }
 
-      console.log('[Cassa] Vendita completata — items:', cart.length, 'totale scontato:', totaleCarrello);
+      const totalUnits = cart.reduce((s, i) => s + i.quantita, 0);
+      console.log('[Cassa] Vendita completata — items:', cart.length, 'unità:', totalUnits, 'totale scontato:', totaleCarrello);
       setCart([]);
       setSearchQuery('');
-      Alert.alert('Vendita completata', `${cart.length} articoli venduti per ${formatCurrency(totaleCarrello)}`);
+      Alert.alert('Vendita completata', `${totalUnits} unità vendute per ${formatCurrency(totaleCarrello)}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Errore durante la vendita';
       console.error('[Cassa] conferma vendita error:', msg);
@@ -469,35 +532,90 @@ export default function CassaScreen() {
   // ── Cart item renderer ─────────────────────────────────────────────────────
 
   const renderCartItem = ({ item }: { item: CartItem }) => {
+    const itemTotale = item.prezzo * item.quantita;
+    const itemTotaleScontato = hasSconto ? itemTotale * (1 - scontoPercentuale / 100) : null;
     const prezzoLabel = formatCurrency(item.prezzo);
-    const prezzScontato = hasSconto ? formatCurrency(item.prezzo * (1 - scontoPercentuale / 100)) : null;
+    const totaleLabel = formatCurrency(hasSconto ? (itemTotaleScontato ?? itemTotale) : itemTotale);
+    const canDecrement = item.quantita > 1;
+    const canIncrement = item.quantita < item.quantita_disponibile;
+
     return (
       <View style={{
         backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, marginBottom: 8,
-        borderWidth: 1, borderColor: COLORS.border, flexDirection: 'row', alignItems: 'center', gap: 10,
+        borderWidth: 1, borderColor: COLORS.border,
       }}>
-        <View style={{ width: 36, height: 36, borderRadius: 9, backgroundColor: COLORS.primaryMuted, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-          <Package size={16} color={COLORS.primary} />
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>{item.identifier}</Text>
-          <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>{item.desc}</Text>
-        </View>
-        <View style={{ alignItems: 'flex-end', marginRight: 4 }}>
-          {hasSconto ? (
-            <>
-              <Text style={{ fontSize: 11, color: COLORS.textTertiary, textDecorationLine: 'line-through' }}>{prezzoLabel}</Text>
-              <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.success ?? '#22c55e' }}>{prezzScontato}</Text>
-            </>
-          ) : (
-            <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.primary }}>{prezzoLabel}</Text>
-          )}
-        </View>
-        <AnimatedPressable onPress={() => handleRemove(item.id)}>
-          <View style={{ width: 34, height: 34, borderRadius: 8, backgroundColor: COLORS.dangerMuted, alignItems: 'center', justifyContent: 'center' }}>
-            <Trash2 size={15} color={COLORS.danger} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <View style={{ width: 36, height: 36, borderRadius: 9, backgroundColor: COLORS.primaryMuted, alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Package size={16} color={COLORS.primary} />
           </View>
-        </AnimatedPressable>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>{item.identifier}</Text>
+            <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>{item.desc}</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end', marginRight: 4 }}>
+            {hasSconto ? (
+              <>
+                <Text style={{ fontSize: 10, color: COLORS.textTertiary, textDecorationLine: 'line-through' }}>{prezzoLabel}</Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: '#22c55e' }}>{totaleLabel}</Text>
+              </>
+            ) : (
+              <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.primary }}>{totaleLabel}</Text>
+            )}
+          </View>
+          <AnimatedPressable onPress={() => handleRemove(item.id)}>
+            <View style={{ width: 34, height: 34, borderRadius: 8, backgroundColor: COLORS.dangerMuted, alignItems: 'center', justifyContent: 'center' }}>
+              <Trash2 size={15} color={COLORS.danger} />
+            </View>
+          </AnimatedPressable>
+        </View>
+
+        {/* Quantity controls */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+          <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>
+            Disp: {item.quantita_disponibile}
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 0 }}>
+            <TouchableOpacity
+              onPress={() => {
+                console.log('[Cassa] qty decrement pressed — id:', item.id, 'current:', item.quantita);
+                handleChangeQty(item.id, -1);
+              }}
+              disabled={!canDecrement}
+              activeOpacity={0.7}
+              style={{
+                width: 32, height: 32, borderRadius: 8,
+                backgroundColor: canDecrement ? COLORS.surfaceSecondary : COLORS.background,
+                borderWidth: 1, borderColor: COLORS.border,
+                alignItems: 'center', justifyContent: 'center',
+                opacity: canDecrement ? 1 : 0.4,
+              }}
+            >
+              <Minus size={14} color={COLORS.text} />
+            </TouchableOpacity>
+            <View style={{ minWidth: 36, alignItems: 'center', paddingHorizontal: 8 }}>
+              <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text, fontVariant: ['tabular-nums'] }}>
+                {item.quantita}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => {
+                console.log('[Cassa] qty increment pressed — id:', item.id, 'current:', item.quantita, 'max:', item.quantita_disponibile);
+                handleChangeQty(item.id, 1);
+              }}
+              disabled={!canIncrement}
+              activeOpacity={0.7}
+              style={{
+                width: 32, height: 32, borderRadius: 8,
+                backgroundColor: canIncrement ? COLORS.primaryMuted : COLORS.background,
+                borderWidth: 1, borderColor: canIncrement ? COLORS.primary : COLORS.border,
+                alignItems: 'center', justifyContent: 'center',
+                opacity: canIncrement ? 1 : 0.4,
+              }}
+            >
+              <Plus size={14} color={canIncrement ? COLORS.primary : COLORS.textTertiary} />
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
     );
   };
@@ -597,7 +715,12 @@ export default function CassaScreen() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <ShoppingCart size={18} color={COLORS.primary} />
                     <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }}>{cart.length}</Text>
-                    <Text style={{ fontSize: 14, color: COLORS.textSecondary }}>articoli</Text>
+                    <Text style={{ fontSize: 14, color: COLORS.textSecondary }}>SKU</Text>
+                    <Text style={{ fontSize: 14, color: COLORS.textTertiary }}>·</Text>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }}>
+                      {cart.reduce((s, i) => s + i.quantita, 0)}
+                    </Text>
+                    <Text style={{ fontSize: 14, color: COLORS.textSecondary }}>unità</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
                     {hasSconto ? (
@@ -703,7 +826,7 @@ export default function CassaScreen() {
             backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.border,
           }}>
             <Text style={{ fontSize: 18, fontWeight: '700', color: COLORS.text }}>Sfoglia Articoli</Text>
-            <AnimatedPressable onPress={() => { setShowSfogliaModal(false); setSfogliaFilter(''); }}>
+            <AnimatedPressable onPress={() => { console.log('[Cassa] sfoglia modal dismissed'); setShowSfogliaModal(false); setSfogliaFilter(''); }}>
               <View style={{ padding: 4 }}>
                 <X size={22} color={COLORS.textSecondary} />
               </View>
@@ -747,8 +870,12 @@ export default function CassaScreen() {
                 const alreadyInCart = cart.some(c => c.id === item.id);
                 const descLabel = item.desc !== '—' ? item.desc : item.identifier;
                 const subLabel = `${item.identifier} · ${item.lotto_codice}`;
+                const qtaDisp = item.quantita_disponibile;
                 return (
-                  <AnimatedPressable onPress={() => !alreadyInCart && handleSfogliaSelect(item)} style={{ opacity: alreadyInCart ? 0.4 : 1 }}>
+                  <AnimatedPressable onPress={() => {
+                    console.log('[Cassa] sfoglia item tapped:', item.identifier, 'alreadyInCart:', alreadyInCart);
+                    if (!alreadyInCart) handleSfogliaSelect(item);
+                  }} style={{ opacity: alreadyInCart ? 0.4 : 1 }}>
                     <View style={{
                       backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, marginBottom: 8,
                       borderWidth: 1, borderColor: COLORS.border, flexDirection: 'row', alignItems: 'center', gap: 10,
@@ -759,6 +886,16 @@ export default function CassaScreen() {
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>{descLabel}</Text>
                         <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>{subLabel}</Text>
+                        {qtaDisp > 1 && (
+                          <View style={{
+                            backgroundColor: COLORS.primaryMuted, borderRadius: 5,
+                            paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start', marginTop: 4,
+                          }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.primary }}>
+                              Qtà disp: {qtaDisp}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                       <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.primary }}>{prezzoLabel}</Text>
                     </View>

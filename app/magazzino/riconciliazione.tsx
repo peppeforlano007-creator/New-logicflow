@@ -23,10 +23,13 @@ interface StoreOption {
 
 interface RiconciliazioneData {
   caricato_count: number;
+  caricato_unita: number;
   caricato_valore: number;
   scaricato_count: number;
+  scaricato_unita: number;
   scaricato_valore: number;
   venduto_count: number;
+  venduto_unita: number;
   venduto_valore: number;
   incassato: number;
   ammanchi: AmmancoItem[];
@@ -38,6 +41,7 @@ interface AmmancoItem {
   identifier: string;
   desc: string;
   prezzo: number;
+  quantita_disponibile: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -75,6 +79,7 @@ function formatDate(d: Date): string {
 
 interface StatCardProps {
   label: string;
+  unita: number;
   count: number;
   valore: number;
   color: string;
@@ -82,8 +87,8 @@ interface StatCardProps {
   icon: React.ReactNode;
 }
 
-function StatCard({ label, count, valore, color, bg, icon }: StatCardProps) {
-  const countLabel = `${count} art.`;
+function StatCard({ label, unita, count, valore, color, bg, icon }: StatCardProps) {
+  const unitaLabel = `${unita} unità`;
   const valoreLabel = formatCurrency(valore);
   return (
     <View style={{
@@ -98,7 +103,7 @@ function StatCard({ label, count, valore, color, bg, icon }: StatCardProps) {
       <Text style={{ fontSize: 11, fontWeight: '600', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
         {label}
       </Text>
-      <Text style={{ fontSize: 20, fontWeight: '800', color, letterSpacing: -0.3 }}>{countLabel}</Text>
+      <Text style={{ fontSize: 20, fontWeight: '800', color, letterSpacing: -0.3 }}>{unitaLabel}</Text>
       <Text style={{ fontSize: 13, color: COLORS.textSecondary, marginTop: 2 }}>{valoreLabel}</Text>
     </View>
   );
@@ -147,10 +152,10 @@ export default function RiconciliazioneScreen() {
       const dateTo = dataFine.toISOString().split('T')[0];
       const isoFine = new Date(dataFine.getTime() + 86400000).toISOString().split('T')[0]; // +1 day inclusive for chiusure_cassa
 
-      // Fetch movimenti directly by store_id (vendite have store_id but lotto_id=null)
+      // Fetch movimenti with quantita field
       const { data: movList, error: movErr } = await db
         .from('movimenti')
-        .select('id, tipo, prezzo, articolo_id, lotto_id, store_id, created_at, supplier_items!movimenti_articolo_id_fkey(id, item_code, original_data, extra_data)')
+        .select('id, tipo, prezzo, quantita, articolo_id, lotto_id, store_id, created_at, supplier_items!movimenti_articolo_id_fkey(id, item_code, original_data, extra_data, quantita_disponibile)')
         .eq('store_id', selectedStore.id)
         .in('tipo', ['carico', 'scarico', 'vendita'])
         .gte('created_at', dateFrom + 'T00:00:00')
@@ -158,7 +163,7 @@ export default function RiconciliazioneScreen() {
       if (movErr) throw movErr;
       const movimenti = movList;
 
-      // Fetch chiusure_cassa in period (global, filtered by operatore if needed)
+      // Fetch chiusure_cassa in period
       const { data: chiusure, error: chiErr } = await db
         .from('chiusure_cassa')
         .select('incassato_operatore')
@@ -172,12 +177,20 @@ export default function RiconciliazioneScreen() {
       type MovimentoRow = {
         tipo: string;
         prezzo: number;
-        supplier_items: { id: string; item_code: string; original_data: Record<string, string>; extra_data: Record<string, unknown> } | null;
+        quantita: number;
+        supplier_items: {
+          id: string;
+          item_code: string;
+          original_data: Record<string, string>;
+          extra_data: Record<string, unknown>;
+          quantita_disponibile: number | null;
+        } | null;
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const typedMovimenti = ((movimenti ?? []) as any[]).map((m: any) => ({
         tipo: m.tipo as string,
         prezzo: Number(m.prezzo) || 0,
+        quantita: Number(m.quantita) || 1,
         supplier_items: (m.supplier_items ?? null) as MovimentoRow['supplier_items'],
       })) as MovimentoRow[];
 
@@ -188,33 +201,44 @@ export default function RiconciliazioneScreen() {
       const scarichi = typedMovimenti.filter(m => m.tipo === 'scarico');
       const vendite = typedMovimenti.filter(m => m.tipo === 'vendita');
 
+      // Sum units using quantita field
+      const caricato_unita = carichi.reduce((s, m) => s + (m.quantita ?? 1), 0);
+      const scaricato_unita = scarichi.reduce((s, m) => s + (m.quantita ?? 1), 0);
+      const venduto_unita = vendite.reduce((s, m) => s + (m.quantita ?? 1), 0);
+
       const sumValoreFromExtraData = (items: typeof typedMovimenti) =>
         items.reduce((sum, m) => sum + extractPrezzo(m.supplier_items?.extra_data ?? {}), 0);
 
       // Venduto: usa m.prezzo direttamente (già salvato nel movimento di vendita)
       const venduto_valore = vendite.reduce((sum, m) => sum + m.prezzo, 0);
 
-      // Ammanchi: articoli caricati non venduti né scaricati
-      const vendutoIds = new Set(vendite.map(m => m.supplier_items?.id).filter(Boolean));
-      const scaricoIds = new Set(scarichi.map(m => m.supplier_items?.id).filter(Boolean));
+      // Ammanchi: articoli caricati con quantita_disponibile > 0 (non ancora esauriti)
       const ammanchi: AmmancoItem[] = carichi
-        .filter(m => m.supplier_items && !vendutoIds.has(m.supplier_items.id) && !scaricoIds.has(m.supplier_items.id))
+        .filter(m => {
+          if (!m.supplier_items) return false;
+          const qtaDisp = m.supplier_items.quantita_disponibile ?? 0;
+          return qtaDisp > 0;
+        })
         .map(m => {
           const si = m.supplier_items!;
           const identifier = si.original_data?.['PkgID'] ?? si.original_data?.['LPN'] ?? si.item_code;
           const descKey = Object.keys(si.original_data ?? {}).find(k => k.toLowerCase() === 'itemdesc');
           const desc = descKey ? ((si.original_data ?? {})[descKey] || '—') : '—';
-          return { id: si.id, item_code: si.item_code, identifier, desc, prezzo: extractPrezzo(si.extra_data) };
+          const qtaDisp = si.quantita_disponibile ?? 0;
+          return { id: si.id, item_code: si.item_code, identifier, desc, prezzo: extractPrezzo(si.extra_data), quantita_disponibile: qtaDisp };
         });
 
-      console.log('[Riconciliazione] result — carichi:', carichi.length, 'scarichi:', scarichi.length, 'vendite:', vendite.length, 'venduto_valore:', venduto_valore, 'ammanchi:', ammanchi.length, 'incassato:', incassato);
+      console.log('[Riconciliazione] result — carichi:', carichi.length, '(', caricato_unita, 'unità) | scarichi:', scarichi.length, '(', scaricato_unita, 'unità) | vendite:', vendite.length, '(', venduto_unita, 'unità) | venduto_valore:', venduto_valore, '| ammanchi:', ammanchi.length, '| incassato:', incassato);
 
       setData({
         caricato_count: carichi.length,
+        caricato_unita,
         caricato_valore: sumValoreFromExtraData(carichi),
         scaricato_count: scarichi.length,
+        scaricato_unita,
         scaricato_valore: sumValoreFromExtraData(scarichi),
         venduto_count: vendite.length,
+        venduto_unita,
         venduto_valore,
         incassato,
         ammanchi,
@@ -369,6 +393,7 @@ export default function RiconciliazioneScreen() {
             <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
               <StatCard
                 label="Caricato"
+                unita={data.caricato_unita}
                 count={data.caricato_count}
                 valore={data.caricato_valore}
                 color={COLORS.statusImported}
@@ -377,6 +402,7 @@ export default function RiconciliazioneScreen() {
               />
               <StatCard
                 label="Scaricato"
+                unita={data.scaricato_unita}
                 count={data.scaricato_count}
                 valore={data.scaricato_valore}
                 color={COLORS.textSecondary}
@@ -387,6 +413,7 @@ export default function RiconciliazioneScreen() {
             <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
               <StatCard
                 label="Venduto"
+                unita={data.venduto_unita}
                 count={data.venduto_count}
                 valore={data.venduto_valore}
                 color={COLORS.primary}
@@ -463,6 +490,11 @@ export default function RiconciliazioneScreen() {
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>{item.identifier}</Text>
                         <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>{item.desc}</Text>
+                        {item.quantita_disponibile > 1 && (
+                          <Text style={{ fontSize: 11, color: COLORS.warning, fontWeight: '600', marginTop: 2 }}>
+                            {item.quantita_disponibile} unità mancanti
+                          </Text>
+                        )}
                       </View>
                       <Text style={{ fontSize: 13, fontWeight: '700', color: COLORS.warning }}>{prezzoLabel}</Text>
                     </View>

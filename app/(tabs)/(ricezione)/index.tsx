@@ -29,6 +29,8 @@ interface SessionLogEntry {
   fileNames: string[];
   count: number;
   timestamp: Date;
+  quantita_totale?: number;
+  quantita_disponibile?: number;
 }
 
 // ─── Session Log Row ──────────────────────────────────────────────────────────
@@ -62,12 +64,24 @@ function SessionLogRow({ entry }: { entry: SessionLogEntry }) {
     ? <Text style={styles.logDuplicateText}>Già scansionato</Text>
     : <Text style={styles.logNotFoundText}>Codice non trovato</Text>;
 
+  const hasQty = entry.found &&
+    entry.quantita_totale !== undefined &&
+    entry.quantita_disponibile !== undefined;
+  const qtaDisp = entry.quantita_disponibile ?? 0;
+  const qtaTot = entry.quantita_totale ?? 1;
+  const qtaColor = qtaDisp > 0 ? '#16A34A' : '#DC2626';
+
   return (
     <View style={[styles.logRow, rowStyle]}>
       <View style={styles.logRowIcon}>{icon}</View>
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={[styles.logCode, codeStyle]} numberOfLines={1}>{entry.code}</Text>
         {entry.found && <Text style={styles.logMeta} numberOfLines={1}>{countLabel}</Text>}
+        {hasQty && (
+          <Text style={[styles.logMeta, { color: qtaColor }]}>
+            Qtà: {qtaDisp} disponibili su {qtaTot} totali
+          </Text>
+        )}
         {entry.found && fileNamesStr ? <Text style={styles.logFileName} numberOfLines={1}>{fileNamesStr}</Text> : null}
         {bottomText}
       </View>
@@ -224,11 +238,11 @@ export default function RicezioneScreen() {
           return;
         }
 
-        // Query DB directly for matching items
+        // Query DB directly for matching items — include quantita fields
         console.log('[Ricezione] Querying DB for code:', trimmed, '| column:', selectedColumn, '| fileIds:', activeFileIds.length);
         const { data: matchedRaw, error: searchError } = await db
           .from('supplier_items')
-          .select('id, file_id, item_code, original_data, extra_data, status')
+          .select('id, file_id, item_code, original_data, extra_data, status, quantita, quantita_disponibile')
           .in('file_id', activeFileIds)
           .eq(`original_data->>${selectedColumn}`, trimmed);
 
@@ -237,7 +251,7 @@ export default function RicezioneScreen() {
           throw searchError;
         }
 
-        const matched = (matchedRaw ?? []) as SupplierItem[];
+        const matched = (matchedRaw ?? []) as (SupplierItem & { quantita?: number; quantita_disponibile?: number })[];
         console.log('[Ricezione] processCode matched:', matched.length, 'items for code:', trimmed, '| column:', selectedColumn);
 
         const logId = `${Date.now()}-${Math.random()}`;
@@ -267,11 +281,17 @@ export default function RicezioneScreen() {
           return;
         }
 
+        // Extract quantita info from first matched item
+        const firstItem = matched[0];
+        const qtaTotale = firstItem.quantita ?? 1;
+        const qtaDisponibile = firstItem.quantita_disponibile ?? 1;
+        console.log('[Ricezione] quantita info — totale:', qtaTotale, 'disponibile:', qtaDisponibile);
+
         // Build a map of file_id -> SupplierFile for involved files
         const activeFileMap = new Map<string, SupplierFile>(activeFiles.map(f => [f.id, f]));
 
         // Group matched items by file
-        const fileMap = new Map<string, { file: SupplierFile; items: SupplierItem[] }>();
+        const fileMap = new Map<string, { file: SupplierFile; items: (SupplierItem & { quantita?: number; quantita_disponibile?: number })[] }>();
         for (const item of matched) {
           const file = activeFileMap.get(item.file_id);
           if (!file) continue;
@@ -351,12 +371,21 @@ export default function RicezioneScreen() {
         const fileLabel = fileNames.length === 1 ? fileNames[0] : `${fileNames.length} file`;
 
         setSessionLog(prev => [
-          { id: logId, code: trimmed, found: true, fileNames, count: matched.length, timestamp: new Date() },
+          {
+            id: logId,
+            code: trimmed,
+            found: true,
+            fileNames,
+            count: matched.length,
+            timestamp: new Date(),
+            quantita_totale: qtaTotale,
+            quantita_disponibile: qtaDisponibile,
+          },
           ...prev.slice(0, 19),
         ]);
 
         showToast(`${countLabel} — ${fileLabel}`, 'success');
-        console.log('[Ricezione] processCode success:', { code: trimmed, count: matched.length, files: fileNames });
+        console.log('[Ricezione] processCode success:', { code: trimmed, count: matched.length, files: fileNames, qtaTotale, qtaDisponibile });
       } catch (err: any) {
         console.error('[Ricezione] processCode error:', err);
         showToast(err?.message ?? 'Errore durante la scansione', 'error');

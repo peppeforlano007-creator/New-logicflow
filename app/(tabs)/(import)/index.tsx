@@ -9,10 +9,11 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
+  TouchableOpacity,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import * as DocumentPicker from 'expo-document-picker';
-import { Upload, FileText, ChevronRight, Plus, X, Check, Trash2 } from 'lucide-react-native';
+import { Upload, FileText, ChevronRight, Plus, X, Check, Trash2, ChevronDown } from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { FileStatusBadge, FormatBadge } from '@/components/StatusBadge';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
@@ -83,6 +84,8 @@ export default function ImportScreen() {
   const [importing, setImporting] = useState(false);
   const [previewRows, setPreviewRows] = useState(0);
   const [previewCols, setPreviewCols] = useState<string[]>([]);
+  const [quantitaColumn, setQuantitaColumn] = useState<string | null>(null);
+  const [showQtyPicker, setShowQtyPicker] = useState(false);
 
   const fetchFiles = useCallback(async () => {
     console.log('[Import] fetchFiles called');
@@ -146,6 +149,7 @@ export default function ImportScreen() {
       setSelectedFile(asset);
       setPreviewRows(0);
       setPreviewCols([]);
+      setQuantitaColumn(null);
       setModalVisible(true);
 
       // Quick preview: read base64 and call edge function for preview
@@ -181,7 +185,7 @@ export default function ImportScreen() {
 
   const handleConfirmImport = useCallback(async () => {
     if (!selectedFile) return;
-    console.log('[Import] handleConfirmImport called', { fileName: selectedFile.name, importedBy });
+    console.log('[Import] handleConfirmImport called', { fileName: selectedFile.name, importedBy, quantitaColumn });
 
     setImporting(true);
 
@@ -253,17 +257,26 @@ export default function ImportScreen() {
       const codeKeys = ['codice', 'code', 'cod', 'item_code', 'sku', 'articolo'];
       const codeKey = headers.find(h => codeKeys.includes(h.toLowerCase())) ?? headers[0] ?? 'col_0';
 
-      const items = rows.map((row, idx) => ({
-        file_id: fileData.id,
-        row_index: idx,
-        item_code: String(row[codeKey] ?? row[Object.keys(row)[0]] ?? `ITEM_${idx + 1}`),
-        original_data: row,
-        extra_data: {},
-        status: 'pending' as const,
-      }));
+      console.log('[Import] quantitaColumn selected:', quantitaColumn);
+
+      const items = rows.map((row, idx) => {
+        const qty = quantitaColumn
+          ? Math.max(1, parseInt(String(row[quantitaColumn] ?? '1'), 10) || 1)
+          : 1;
+        return {
+          file_id: fileData.id,
+          row_index: idx,
+          item_code: String(row[codeKey] ?? row[Object.keys(row)[0]] ?? `ITEM_${idx + 1}`),
+          original_data: row,
+          extra_data: {},
+          status: 'pending' as const,
+          quantita: qty,
+          quantita_disponibile: qty,
+        };
+      });
 
       if (items.length > 0) {
-        console.log('[Import] Inserting', items.length, 'items');
+        console.log('[Import] Inserting', items.length, 'items with quantita column:', quantitaColumn ?? 'none (default 1)');
         const { error: itemsError } = await db.from('supplier_items').insert(items);
         if (itemsError) {
           console.error('[Import] insert supplier_items error:', itemsError);
@@ -275,6 +288,7 @@ export default function ImportScreen() {
       setModalVisible(false);
       setSelectedFile(null);
       setImportedBy('');
+      setQuantitaColumn(null);
       showToast(`File importato con successo (${items.length} articoli)`, 'success');
       fetchFiles();
     } catch (err: any) {
@@ -283,7 +297,7 @@ export default function ImportScreen() {
     } finally {
       setImporting(false);
     }
-  }, [selectedFile, importedBy, fetchFiles, showToast]);
+  }, [selectedFile, importedBy, quantitaColumn, fetchFiles, showToast]);
 
   const handleDeleteFile = useCallback((fileId: string, fileName: string) => {
     console.log('[Import] handleDeleteFile called', { fileId, fileName });
@@ -425,6 +439,10 @@ export default function ImportScreen() {
     </View>
   );
 
+  // Quantity column picker options
+  const qtyOptions = ['Nessuna (default 1)', ...previewCols];
+  const qtyLabel = quantitaColumn ?? 'Nessuna (default 1)';
+
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
       <Stack.Screen
@@ -484,6 +502,7 @@ export default function ImportScreen() {
         onRequestClose={() => {
           console.log('[Import] Modal closed');
           setModalVisible(false);
+          setQuantitaColumn(null);
         }}
       >
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -507,6 +526,7 @@ export default function ImportScreen() {
               onPress={() => {
                 console.log('[Import] Modal dismiss button pressed');
                 setModalVisible(false);
+                setQuantitaColumn(null);
               }}
             >
               <View
@@ -618,6 +638,39 @@ export default function ImportScreen() {
               />
             </View>
 
+            {/* Colonna Quantità */}
+            <View style={{ gap: 6 }}>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.text }}>
+                Colonna Quantità
+              </Text>
+              <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>
+                Seleziona la colonna che contiene le quantità (opzionale)
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('[Import] Colonna Quantità picker opened, previewCols:', previewCols);
+                  setShowQtyPicker(true);
+                }}
+                activeOpacity={0.8}
+                style={{
+                  backgroundColor: COLORS.surface,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: quantitaColumn ? COLORS.primary : COLORS.border,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <Text style={{ fontSize: 15, color: quantitaColumn ? COLORS.text : COLORS.textTertiary }}>
+                  {qtyLabel}
+                </Text>
+                <ChevronDown size={16} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
             {/* Confirm button */}
             <AnimatedPressable
               onPress={handleConfirmImport}
@@ -645,6 +698,64 @@ export default function ImportScreen() {
                 </Text>
               </View>
             </AnimatedPressable>
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Quantity Column Picker Modal */}
+      <Modal
+        visible={showQtyPicker}
+        animationType="slide"
+        presentationStyle="formSheet"
+        onRequestClose={() => setShowQtyPicker(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: COLORS.background }}>
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+            padding: 20, paddingTop: 24,
+            borderBottomWidth: 1, borderBottomColor: COLORS.border,
+            backgroundColor: COLORS.surface,
+          }}>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: COLORS.text }}>Colonna Quantità</Text>
+            <AnimatedPressable onPress={() => { console.log('[Import] qty picker dismissed'); setShowQtyPicker(false); }}>
+              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.surfaceSecondary, alignItems: 'center', justifyContent: 'center' }}>
+                <X size={16} color={COLORS.textSecondary} />
+              </View>
+            </AnimatedPressable>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            {qtyOptions.map(opt => {
+              const isNone = opt === 'Nessuna (default 1)';
+              const isSelected = isNone ? quantitaColumn === null : quantitaColumn === opt;
+              return (
+                <TouchableOpacity
+                  key={opt}
+                  onPress={() => {
+                    const val = isNone ? null : opt;
+                    console.log('[Import] quantitaColumn selected:', val);
+                    setQuantitaColumn(val);
+                    setShowQtyPicker(false);
+                  }}
+                  activeOpacity={0.8}
+                  style={{
+                    backgroundColor: isSelected ? COLORS.primaryMuted : COLORS.surface,
+                    borderRadius: 12,
+                    padding: 14,
+                    marginBottom: 8,
+                    borderWidth: 1,
+                    borderColor: isSelected ? COLORS.primary : COLORS.border,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <Text style={{ fontSize: 15, fontWeight: isSelected ? '600' : '400', color: isSelected ? COLORS.primary : COLORS.text }}>
+                    {opt}
+                  </Text>
+                  {isSelected && <Check size={16} color={COLORS.primary} />}
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </View>
       </Modal>

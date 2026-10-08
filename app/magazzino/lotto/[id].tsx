@@ -36,6 +36,8 @@ interface LottoArticolo {
   extra_data: Record<string, string>;
   status: string;
   venduto?: boolean;
+  quantita?: number;
+  quantita_disponibile?: number;
 }
 
 interface StoreItem {
@@ -156,18 +158,21 @@ export default function DettaglioLottoScreen() {
 
   const handleConfermaCarico = async () => {
     if (!selectedStore || !lotto) return;
-    console.log('[DettaglioLotto] Conferma carico pressed — store:', selectedStore.nome, 'lotto:', lotto.codice_lotto);
+    const totalUnits = articoli.reduce((s, a) => s + ((a as any).quantita ?? 1), 0);
+    console.log('[DettaglioLotto] Conferma carico pressed — store:', selectedStore.nome, 'lotto:', lotto.codice_lotto, 'articoli:', articoli.length, 'unità totali:', totalUnits);
     setCaricando(true);
     setCaricaError(null);
     try {
-      // INSERT movimenti tipo='carico' per ogni articolo
+      // INSERT movimenti tipo='carico' per ogni articolo con quantita
       const movimenti = articoli.map(a => ({
         lotto_id: lotto.id,
         store_id: selectedStore.id,
         articolo_id: a.id,
         tipo: 'carico',
+        quantita: (a as any).quantita ?? 1,
       }));
       if (movimenti.length > 0) {
+        console.log('[DettaglioLotto] inserting movimenti carico:', movimenti.length, 'total units:', totalUnits);
         const { error: movErr } = await db.from('movimenti').insert(movimenti);
         if (movErr) throw movErr;
       }
@@ -177,7 +182,7 @@ export default function DettaglioLottoScreen() {
         .update({ store_id: selectedStore.id, stato: 'caricato' })
         .eq('id', lotto.id);
       if (lottoErr) throw lottoErr;
-      console.log('[DettaglioLotto] Carico completato con successo');
+      console.log('[DettaglioLotto] Carico completato con successo — store:', selectedStore.nome, 'unità:', totalUnits);
       setShowStoreModal(false);
       fetchData();
     } catch (err: unknown) {
@@ -196,6 +201,10 @@ export default function DettaglioLottoScreen() {
     const descKey = Object.keys(item.original_data ?? {}).find(k => k.toLowerCase() === 'itemdesc');
     const descValue = descKey ? ((item.original_data ?? {})[descKey] || '—') : '—';
     const isVenduto = item.venduto === true;
+    const qtaTot = (item as any).quantita ?? 1;
+    const qtaDisp = (item as any).quantita_disponibile ?? 0;
+    const showQtyBadge = qtaTot > 1;
+    const isEsaurito = qtaDisp === 0 && qtaTot > 0;
 
     return (
       <AnimatedListItem index={index}>
@@ -227,6 +236,21 @@ export default function DettaglioLottoScreen() {
             <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>
               {descValue}
             </Text>
+            {showQtyBadge && (
+              <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+                {isEsaurito ? (
+                  <View style={{ backgroundColor: '#FEE2E2', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start' }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: '#DC2626' }}>Esaurito</Text>
+                  </View>
+                ) : (
+                  <View style={{ backgroundColor: COLORS.primaryMuted, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start' }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.primary }}>
+                      Qtà: {qtaDisp}/{qtaTot}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            )}
           </View>
           {isVenduto && (
             <View style={{ backgroundColor: COLORS.primaryMuted, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
@@ -261,6 +285,13 @@ export default function DettaglioLottoScreen() {
   const statoColor = getStatoColor(lotto.stato);
   const statoBg = getStatoBg(lotto.stato);
   const statoLabel = getStatoLabel(lotto.stato);
+
+  // Totale unità e SKU per header
+  const totalUnita = articoli.reduce((s, a) => s + ((a as any).quantita ?? 1), 0);
+  const totalSku = articoli.length;
+  const headerCountLabel = totalUnita !== totalSku
+    ? `${totalUnita} unità in ${totalSku} SKU`
+    : `${totalSku} articoli`;
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -303,7 +334,7 @@ export default function DettaglioLottoScreen() {
                     <View style={{ backgroundColor: statoBg, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 }}>
                       <Text style={{ fontSize: 11, fontWeight: '700', color: statoColor }}>{statoLabel}</Text>
                     </View>
-                    <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>{articoli.length} articoli</Text>
+                    <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>{headerCountLabel}</Text>
                   </View>
                 </View>
               </View>
@@ -329,7 +360,7 @@ export default function DettaglioLottoScreen() {
             )}
 
             <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-              Articoli ({articoli.length})
+              Articoli ({totalSku})
             </Text>
           </View>
         }

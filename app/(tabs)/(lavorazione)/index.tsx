@@ -27,6 +27,8 @@ interface ItemWithFile extends SupplierItem {
     file_name: string;
     extra_columns: string[];
   } | null;
+  quantita?: number;
+  quantita_disponibile?: number;
 }
 
 // ─── AnimatedListItem ─────────────────────────────────────────────────────────
@@ -73,7 +75,7 @@ export default function LavorazioneScreen() {
     try {
       const { data, error } = await db
         .from('supplier_items')
-        .select('*, supplier_files(file_name, extra_columns)')
+        .select('id, file_id, row_index, item_code, original_data, extra_data, status, quantita, quantita_disponibile, processed_at, processed_by, created_at, supplier_files(file_name, extra_columns)')
         .in('status', ['processing', 'completed'])
         .order('created_at', { ascending: false });
 
@@ -168,7 +170,7 @@ export default function LavorazioneScreen() {
 
   const handleItemPress = useCallback((item: ItemWithFile) => {
     const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
-    console.log('[Lavorazione] item pressed:', { id: item.id, identifier });
+    console.log('[Lavorazione] item pressed:', { id: item.id, identifier, quantita_disponibile: item.quantita_disponibile });
     router.push(`/item/${item.id}` as any);
   }, [router]);
 
@@ -179,6 +181,14 @@ export default function LavorazioneScreen() {
     const fileName = item.supplier_files?.file_name ?? '—';
     const itemStatus = item.status as 'pending' | 'processing' | 'completed';
     const isCompleted = item.status === 'completed';
+    const qtaDisp = item.quantita_disponibile ?? 1;
+    const showQtyBadge = qtaDisp > 1;
+
+    const descValue = (() => {
+      const data = item.original_data ?? {};
+      const key = Object.keys(data).find(k => k.toLowerCase() === 'itemdesc');
+      return key ? (data[key] || '—') : '—';
+    })();
 
     return (
       <AnimatedListItem index={index}>
@@ -223,14 +233,23 @@ export default function LavorazioneScreen() {
                 style={{ fontSize: 12, color: COLORS.textSecondary }}
                 numberOfLines={1}
               >
-                {(() => {
-                    const data = item.original_data ?? {};
-                    const key = Object.keys(data).find(k => k.toLowerCase() === 'itemdesc');
-                    return key ? (data[key] || '—') : '—';
-                  })()}
+                {descValue}
               </Text>
-              <View style={{ marginTop: 6 }}>
+              <View style={{ marginTop: 6, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                 <ItemStatusBadge status={itemStatus} size="sm" />
+                {showQtyBadge && (
+                  <View style={{
+                    backgroundColor: COLORS.primaryMuted,
+                    borderRadius: 5,
+                    paddingHorizontal: 6,
+                    paddingVertical: 2,
+                    alignSelf: 'flex-start',
+                  }}>
+                    <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.primary }}>
+                      Qtà: {qtaDisp}
+                    </Text>
+                  </View>
+                )}
               </View>
             </View>
 
