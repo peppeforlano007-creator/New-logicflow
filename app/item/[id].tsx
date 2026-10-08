@@ -233,7 +233,7 @@ export default function ItemDetailScreen() {
       if (savedLottoCodice && lottiList.length > 0) {
         const found = lottiList.find(l => l.codice_lotto === savedLottoCodice) ?? null;
         setSelectedLotto(found);
-        setSelectedLottoId(found?.id ?? savedLottoId || null);
+        setSelectedLottoId((found?.id ?? savedLottoId) || null);
         console.log('[ItemDetail] restored lotto:', found?.codice_lotto ?? 'not found in active lotti');
       } else if (savedLottoId) {
         setSelectedLottoId(savedLottoId);
