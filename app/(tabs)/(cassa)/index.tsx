@@ -170,6 +170,22 @@ export default function CassaScreen() {
         }
       }
 
+      // Verifica che l'articolo non sia già stato venduto in questo store
+      const { data: vendutoCheck } = await db
+        .from('movimenti')
+        .select('id')
+        .eq('articolo_id', data.id)
+        .eq('store_id', storeId)
+        .eq('tipo', 'vendita')
+        .limit(1)
+        .single();
+
+      if (vendutoCheck) {
+        console.log('[Cassa] item already sold in this store — articolo_id:', data.id, 'store_id:', storeId);
+        setSearchError(`Articolo già venduto in questo store`);
+        return;
+      }
+
       const identifier = data.original_data?.['PkgID'] ?? data.original_data?.['LPN'] ?? data.item_code;
       const descKey = Object.keys(data.original_data ?? {}).find((k: string) => k.toLowerCase() === 'itemdesc');
       const desc = descKey ? ((data.original_data ?? {})[descKey] || '—') : '—';
