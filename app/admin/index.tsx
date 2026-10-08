@@ -24,6 +24,7 @@ const TAB_PERMISSIONS = [
   { key: 'import', label: 'Import' },
   { key: 'ricezione', label: 'Ricezione' },
   { key: 'lavorazione', label: 'Lavorazione' },
+  { key: 'magazzino', label: 'Magazzino' },
   { key: 'export', label: 'Export' },
 ];
 
@@ -57,7 +58,7 @@ const emptyForm = {
   username: '',
   password: '',
   role: 'user' as 'admin' | 'user',
-  tab_permissions: ['import', 'ricezione', 'lavorazione', 'export'],
+  tab_permissions: ['import', 'ricezione', 'lavorazione', 'magazzino', 'export'],
   is_active: true,
 };
 

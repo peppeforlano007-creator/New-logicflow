@@ -9,6 +9,7 @@ const ALL_TABS: TabBarItem[] = [
   { name: '(import)', route: '/(tabs)/(import)' as any, icon: 'file-download', label: 'Import' },
   { name: '(ricezione)', route: '/(tabs)/(ricezione)' as any, icon: 'inventory', label: 'Ricezione' },
   { name: '(lavorazione)', route: '/(tabs)/(lavorazione)' as any, icon: 'build', label: 'Lavorazione' },
+  { name: '(magazzino)', route: '/(tabs)/(magazzino)' as any, icon: 'inventory-2', label: 'Magazzino' },
   { name: '(export)', route: '/(tabs)/(export)' as any, icon: 'file-upload', label: 'Export' },
 ];
 
@@ -16,6 +17,7 @@ const PERMISSION_MAP: Record<string, string> = {
   '(import)': 'import',
   '(ricezione)': 'ricezione',
   '(lavorazione)': 'lavorazione',
+  '(magazzino)': 'magazzino',
   '(export)': 'export',
 };
 
@@ -67,9 +69,10 @@ export default function TabLayout() {
         <Stack.Screen name="(import)" />
         <Stack.Screen name="(ricezione)" />
         <Stack.Screen name="(lavorazione)" />
+        <Stack.Screen name="(magazzino)" />
         <Stack.Screen name="(export)" />
       </Stack>
-      <FloatingTabBar tabs={visibleTabs} containerWidth={340} />
+      <FloatingTabBar tabs={visibleTabs} containerWidth={420} />
     </View>
   );
 }

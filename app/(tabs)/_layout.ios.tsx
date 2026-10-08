@@ -16,6 +16,10 @@ export default function TabLayout() {
         <Icon sf="wrench.fill" />
         <Label>Lavorazione</Label>
       </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="(magazzino)">
+        <Icon sf="shippingbox.and.arrow.backward.fill" />
+        <Label>Magazzino</Label>
+      </NativeTabs.Trigger>
       <NativeTabs.Trigger name="(export)">
         <Icon sf="arrow.up.doc.fill" />
         <Label>Export</Label>
