@@ -7,9 +7,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Modal,
+  FlatList,
+  TouchableOpacity,
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { CheckCircle, Clock, Camera, ChevronDown, ChevronUp, Search } from 'lucide-react-native';
+import { CheckCircle, Clock, Camera, ChevronDown, ChevronUp, Search, X } from 'lucide-react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { ScannerModal } from '@/components/ScannerModal';
 import { COLORS } from '@/constants/AppColors';
@@ -37,6 +40,13 @@ const SELEZIONE_OPTIONS = [
   { value: 'B' as const, label: 'B', description: 'AMAZONPRICE −50%' },
   { value: 'C' as const, label: 'C', description: 'AMAZONPRICE −70%' },
 ];
+
+type Lotto = {
+  id: string;
+  codice_lotto: string;
+  descrizione: string | null;
+  stato: string;
+};
 
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
@@ -90,6 +100,18 @@ function formatPrice(n: number): string {
   return n.toFixed(2); // punto, non virgola
 }
 
+function LottoStatoBadge({ stato }: { stato: string }) {
+  const isCaricato = stato === 'caricato';
+  const bgColor = isCaricato ? '#D1FAE5' : '#DBEAFE';
+  const textColor = isCaricato ? '#065F46' : '#1E40AF';
+  const label = isCaricato ? 'Caricato' : 'Magazzino';
+  return (
+    <View style={{ backgroundColor: bgColor, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+      <Text style={{ fontSize: 11, fontWeight: '700', color: textColor }}>{label}</Text>
+    </View>
+  );
+}
+
 export default function ItemDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -114,9 +136,15 @@ export default function ItemDetailScreen() {
   // Prezzo di Vendita state
   const [prezzoVendita, setPrezzoVendita] = useState('');
 
-  // SKU and Lotto state
+  // SKU state
   const [skuVendita, setSkuVendita] = useState('');
-  const [lottoVendita, setLottoVendita] = useState('');
+
+  // Lotto selector state
+  const [lotti, setLotti] = useState<Lotto[]>([]);
+  const [selectedLotto, setSelectedLotto] = useState<Lotto | null>(null);
+  const [selectedLottoId, setSelectedLottoId] = useState<string | null>(null);
+  const [lottoModalVisible, setLottoModalVisible] = useState(false);
+  const [lottoSearch, setLottoSearch] = useState('');
 
   // EAN Corretto and ASIN Corretto state
   const [eanCorretto, setEanCorretto] = useState('');
@@ -131,14 +159,30 @@ export default function ItemDetailScreen() {
   // Track whether we've mounted so the selezione effect doesn't overwrite a restored price
   const isMounted = useRef(false);
 
+  const fetchLotti = useCallback(async () => {
+    console.log('[ItemDetail] fetchLotti called');
+    const { data, error } = await db
+      .from('lotti')
+      .select('id, codice_lotto, descrizione, stato')
+      .in('stato', ['magazzino', 'caricato'])
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.error('[ItemDetail] fetchLotti error:', error);
+      return [];
+    }
+    console.log('[ItemDetail] lotti fetched:', data?.length ?? 0);
+    return (data ?? []) as Lotto[];
+  }, []);
+
   const fetchData = useCallback(async () => {
     console.log('[ItemDetail] fetchData called', { id });
     try {
-      const { data: itemData, error: itemError } = await db
-        .from('supplier_items')
-        .select('*')
-        .eq('id', id)
-        .single();
+      const [{ data: itemData, error: itemError }, lottiList] = await Promise.all([
+        db.from('supplier_items').select('*').eq('id', id).single(),
+        fetchLotti(),
+      ]);
+
+      setLotti(lottiList);
 
       if (itemError) {
         console.error('[ItemDetail] item fetch error:', itemError);
@@ -179,10 +223,21 @@ export default function ItemDetailScreen() {
         setPrezzoVendita(savedPrezzo);
       }
 
-      // Restore SKU and Lotto from extraData
+      // Restore SKU from extraData
       setSkuVendita(fetchedItem.extra_data?.['SKU'] ?? '');
-      setLottoVendita(fetchedItem.extra_data?.['Lotto'] ?? '');
-      console.log('[ItemDetail] restoring SKU:', fetchedItem.extra_data?.['SKU'], 'Lotto:', fetchedItem.extra_data?.['Lotto']);
+
+      // Restore Lotto selector from extraData
+      const savedLottoCodice = fetchedItem.extra_data?.['Lotto'] ?? '';
+      const savedLottoId = fetchedItem.extra_data?.['LottoId'] ?? '';
+      console.log('[ItemDetail] restoring SKU:', fetchedItem.extra_data?.['SKU'], 'Lotto:', savedLottoCodice, 'LottoId:', savedLottoId);
+      if (savedLottoCodice && lottiList.length > 0) {
+        const found = lottiList.find(l => l.codice_lotto === savedLottoCodice) ?? null;
+        setSelectedLotto(found);
+        setSelectedLottoId(found?.id ?? savedLottoId || null);
+        console.log('[ItemDetail] restored lotto:', found?.codice_lotto ?? 'not found in active lotti');
+      } else if (savedLottoId) {
+        setSelectedLottoId(savedLottoId);
+      }
 
       // EAN Corretto: restore from extraData if saved, otherwise pull from originalData
       const savedEan = (fetchedItem.extra_data?.['EANCorretto'] ?? '');
@@ -209,8 +264,18 @@ export default function ItemDetailScreen() {
         });
         setExtraData(currentExtra);
         setSkuVendita(currentExtra['SKU'] ?? '');
-        setLottoVendita(currentExtra['Lotto'] ?? '');
         setPrezzoVendita(currentExtra['PrezzoVendita'] ?? '');
+
+        // Re-restore lotto from merged extra
+        const mergedLottoCodice = currentExtra['Lotto'] ?? '';
+        const mergedLottoId = currentExtra['LottoId'] ?? '';
+        if (mergedLottoCodice && lottiList.length > 0) {
+          const found = lottiList.find(l => l.codice_lotto === mergedLottoCodice) ?? null;
+          setSelectedLotto(found);
+          setSelectedLottoId(found?.id ?? mergedLottoId || null);
+        } else if (mergedLottoId) {
+          setSelectedLottoId(mergedLottoId);
+        }
 
         const savedEan2 = currentExtra['EANCorretto'] ?? '';
         setEanCorretto(savedEan2 !== '' ? savedEan2 : normalizeEAN(getOriginalField(fetchedItem.original_data ?? {}, 'EAN')));
@@ -225,7 +290,7 @@ export default function ItemDetailScreen() {
       // Mark as mounted after data is loaded so the selezione effect can run
       isMounted.current = true;
     }
-  }, [id]);
+  }, [id, fetchLotti]);
 
   useEffect(() => {
     fetchData();
@@ -273,8 +338,16 @@ export default function ItemDetailScreen() {
     }
   }, [selezione]);
 
+  const handleLottoSelect = useCallback((lotto: Lotto | null) => {
+    console.log('[ItemDetail] lotto selected:', lotto?.codice_lotto ?? 'none');
+    setSelectedLotto(lotto);
+    setSelectedLottoId(lotto?.id ?? null);
+    setLottoModalVisible(false);
+    setLottoSearch('');
+  }, []);
+
   const handleSave = useCallback(async () => {
-    console.log('[ItemDetail] handleSave called', { id, processedBy: user?.username ?? '', selectedCondition, altroText, selezione, prezzoVendita });
+    console.log('[ItemDetail] handleSave called', { id, processedBy: user?.username ?? '', selectedCondition, altroText, selezione, prezzoVendita, selectedLottoId, selectedLottoCodice: selectedLotto?.codice_lotto });
     setSaving(true);
     try {
       // Compute final AdjReason value
@@ -295,17 +368,19 @@ export default function ItemDetailScreen() {
         Selezione: selezione ?? '',
         PrezzoVendita: prezzoVendita,
         SKU: skuVendita,
-        Lotto: lottoVendita,
+        Lotto: selectedLotto?.codice_lotto ?? '',
+        LottoId: selectedLottoId ?? '',
         EANCorretto: eanCorretto,
         ASINCorretto: asinCorretto,
       };
-      console.log('[ItemDetail] saving extraData:', { Selezione: updatedExtraData.Selezione, PrezzoVendita: updatedExtraData.PrezzoVendita, SKU: updatedExtraData.SKU, Lotto: updatedExtraData.Lotto, EANCorretto: updatedExtraData.EANCorretto, ASINCorretto: updatedExtraData.ASINCorretto });
+      console.log('[ItemDetail] saving extraData:', { Selezione: updatedExtraData.Selezione, PrezzoVendita: updatedExtraData.PrezzoVendita, SKU: updatedExtraData.SKU, Lotto: updatedExtraData.Lotto, LottoId: updatedExtraData.LottoId, EANCorretto: updatedExtraData.EANCorretto, ASINCorretto: updatedExtraData.ASINCorretto });
 
       const { error } = await db
         .from('supplier_items')
         .update({
           original_data: updatedOriginalData,
           extra_data: updatedExtraData,
+          lotto_id: selectedLottoId ?? null,
           status: 'completed',
           processed_at: new Date().toISOString(),
           processed_by: user?.username || null,
@@ -329,10 +404,24 @@ export default function ItemDetailScreen() {
     } finally {
       setSaving(false);
     }
-  }, [id, originalData, extraData, user, selectedCondition, altroText, selezione, prezzoVendita, skuVendita, lottoVendita, eanCorretto, asinCorretto, showToast, router]);
+  }, [id, originalData, extraData, user, selectedCondition, altroText, selezione, prezzoVendita, skuVendita, selectedLotto, selectedLottoId, eanCorretto, asinCorretto, showToast, router]);
 
   const itemDesc = getOriginalField(originalData, 'ITEMDESC');
   const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(itemDesc + ' prezzo')}`;
+
+  // Filtered lotti for modal
+  const lottoSearchLower = lottoSearch.toLowerCase();
+  const filteredLotti = lottoSearch.trim() === ''
+    ? lotti
+    : lotti.filter(l =>
+        l.codice_lotto.toLowerCase().includes(lottoSearchLower) ||
+        (l.descrizione ?? '').toLowerCase().includes(lottoSearchLower)
+      );
+
+  // Display values for lotto selector button
+  const lottoButtonLabel = selectedLotto ? selectedLotto.codice_lotto : 'Seleziona lotto...';
+  const lottoButtonDesc = selectedLotto?.descrizione ?? null;
+  const lottoButtonIsPlaceholder = !selectedLotto;
 
   if (loading) {
     return (
@@ -797,32 +886,56 @@ export default function ItemDetailScreen() {
             </View>
           </View>
 
-          {/* LOTTO */}
+          {/* LOTTO — selector */}
           <View style={{ gap: 4 }}>
             <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5 }}>
               LOTTO
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <TextInput
-                value={lottoVendita}
-                onChangeText={(v) => {
-                  console.log('[ItemDetail] lottoVendita changed:', v);
-                  setLottoVendita(v);
+              <AnimatedPressable
+                style={{ flex: 1 }}
+                onPress={() => {
+                  console.log('[ItemDetail] lotto selector pressed, opening modal');
+                  setLottoModalVisible(true);
                 }}
-                placeholder="Inserisci lotto"
-                placeholderTextColor={COLORS.textTertiary}
-                style={{
-                  flex: 1,
-                  backgroundColor: COLORS.surfaceSecondary,
-                  borderRadius: 10,
-                  borderWidth: 1,
-                  borderColor: COLORS.border,
-                  paddingHorizontal: 12,
-                  paddingVertical: 10,
-                  fontSize: 15,
-                  color: COLORS.text,
-                }}
-              />
+              >
+                <View
+                  style={{
+                    flex: 1,
+                    backgroundColor: COLORS.surfaceSecondary,
+                    borderRadius: 10,
+                    borderWidth: 1,
+                    borderColor: COLORS.border,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    minHeight: 42,
+                  }}
+                >
+                  <View style={{ flex: 1, gap: 1 }}>
+                    <Text
+                      style={{
+                        fontSize: 15,
+                        color: lottoButtonIsPlaceholder ? COLORS.textTertiary : COLORS.text,
+                        fontWeight: lottoButtonIsPlaceholder ? '400' : '600',
+                      }}
+                      numberOfLines={1}
+                    >
+                      {lottoButtonLabel}
+                    </Text>
+                    {lottoButtonDesc ? (
+                      <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>
+                        {lottoButtonDesc}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <ChevronDown size={16} color={COLORS.textSecondary} style={{ marginLeft: 6 }} />
+                </View>
+              </AnimatedPressable>
+
+              {/* Camera button — scan lotto barcode */}
               <AnimatedPressable onPress={() => {
                 console.log('[ItemDetail] scan LOTTO button pressed');
                 setScanTarget('lotto');
@@ -904,17 +1017,213 @@ export default function ItemDetailScreen() {
         onHide={hideToast}
       />
 
+      {/* SKU Scanner */}
       <ScannerModal
-        visible={scanTarget !== null}
+        visible={scanTarget === 'sku'}
         onClose={() => setScanTarget(null)}
         onScanned={(code) => {
-          console.log('[ItemDetail] barcode scanned:', code, 'target:', scanTarget);
-          if (scanTarget === 'sku') setSkuVendita(code);
-          else if (scanTarget === 'lotto') setLottoVendita(code);
+          console.log('[ItemDetail] SKU barcode scanned:', code);
+          setSkuVendita(code);
           setScanTarget(null);
         }}
-        hint={scanTarget === 'sku' ? 'Scansiona barcode SKU' : 'Scansiona barcode LOTTO'}
+        hint="Scansiona barcode SKU"
       />
+
+      {/* Lotto Scanner — cerca nel DB e seleziona automaticamente */}
+      <ScannerModal
+        visible={scanTarget === 'lotto'}
+        onClose={() => setScanTarget(null)}
+        onScanned={async (code) => {
+          console.log('[ItemDetail] LOTTO barcode scanned:', code);
+          setScanTarget(null);
+          const found = lotti.find(l => l.codice_lotto === code) ?? null;
+          if (found) {
+            console.log('[ItemDetail] lotto found by scan:', found.codice_lotto);
+            setSelectedLotto(found);
+            setSelectedLottoId(found.id);
+          } else {
+            console.warn('[ItemDetail] lotto not found for scanned code:', code);
+            showToast(`Lotto "${code}" non trovato`, 'error');
+          }
+        }}
+        hint="Scansiona barcode LOTTO"
+      />
+
+      {/* Lotto Selector Modal */}
+      <Modal
+        visible={lottoModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => {
+          console.log('[ItemDetail] lotto modal closed');
+          setLottoModalVisible(false);
+          setLottoSearch('');
+        }}
+      >
+        <View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' }}>
+          <View
+            style={{
+              backgroundColor: COLORS.background,
+              borderTopLeftRadius: 20,
+              borderTopRightRadius: 20,
+              maxHeight: '80%',
+              paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+            }}
+          >
+            {/* Handle bar */}
+            <View style={{ alignItems: 'center', paddingTop: 12, paddingBottom: 4 }}>
+              <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: COLORS.border }} />
+            </View>
+
+            {/* Header */}
+            <View style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingHorizontal: 16,
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: COLORS.border,
+            }}>
+              <Text style={{ fontSize: 17, fontWeight: '700', color: COLORS.text }}>
+                Seleziona Lotto
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('[ItemDetail] lotto modal close button pressed');
+                  setLottoModalVisible(false);
+                  setLottoSearch('');
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <X size={22} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Search input */}
+            <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: COLORS.surfaceSecondary,
+                borderRadius: 10,
+                borderWidth: 1,
+                borderColor: COLORS.border,
+                paddingHorizontal: 10,
+                gap: 8,
+              }}>
+                <Search size={16} color={COLORS.textSecondary} />
+                <TextInput
+                  value={lottoSearch}
+                  onChangeText={(v) => {
+                    console.log('[ItemDetail] lotto search changed:', v);
+                    setLottoSearch(v);
+                  }}
+                  placeholder="Cerca per codice o descrizione..."
+                  placeholderTextColor={COLORS.textTertiary}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 9,
+                    fontSize: 14,
+                    color: COLORS.text,
+                  }}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                />
+              </View>
+            </View>
+
+            {/* List */}
+            <FlatList
+              data={filteredLotti}
+              keyExtractor={(item) => item.id}
+              keyboardShouldPersistTaps="handled"
+              ListHeaderComponent={
+                <TouchableOpacity
+                  onPress={() => {
+                    console.log('[ItemDetail] lotto deselected (Nessun lotto)');
+                    handleLottoSelect(null);
+                  }}
+                  style={{
+                    paddingHorizontal: 16,
+                    paddingVertical: 14,
+                    borderBottomWidth: 1,
+                    borderBottomColor: COLORS.border,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 10,
+                  }}
+                >
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, color: COLORS.textSecondary, fontStyle: 'italic' }}>
+                      Nessun lotto
+                    </Text>
+                  </View>
+                  {selectedLotto === null && (
+                    <View style={{
+                      width: 18, height: 18, borderRadius: 9,
+                      backgroundColor: COLORS.primary,
+                      alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' }} />
+                    </View>
+                  )}
+                </TouchableOpacity>
+              }
+              renderItem={({ item: lotto }) => {
+                const isSelected = selectedLotto?.id === lotto.id;
+                return (
+                  <TouchableOpacity
+                    onPress={() => {
+                      console.log('[ItemDetail] lotto row pressed:', lotto.codice_lotto);
+                      handleLottoSelect(lotto);
+                    }}
+                    style={{
+                      paddingHorizontal: 16,
+                      paddingVertical: 14,
+                      borderBottomWidth: 1,
+                      borderBottomColor: COLORS.border,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 10,
+                      backgroundColor: isSelected ? COLORS.primaryMuted : 'transparent',
+                    }}
+                  >
+                    <View style={{ flex: 1, gap: 3 }}>
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }}>
+                        {lotto.codice_lotto}
+                      </Text>
+                      {lotto.descrizione ? (
+                        <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>
+                          {lotto.descrizione}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <LottoStatoBadge stato={lotto.stato} />
+                    {isSelected && (
+                      <View style={{
+                        width: 18, height: 18, borderRadius: 9,
+                        backgroundColor: COLORS.primary,
+                        alignItems: 'center', justifyContent: 'center',
+                        marginLeft: 4,
+                      }}>
+                        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' }} />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              }}
+              ListEmptyComponent={
+                <View style={{ padding: 24, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 14, color: COLORS.textSecondary }}>
+                    Nessun lotto trovato
+                  </Text>
+                </View>
+              }
+            />
+          </View>
+        </View>
+      </Modal>
 
     </KeyboardAvoidingView>
   );
