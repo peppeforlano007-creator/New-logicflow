@@ -75,7 +75,12 @@ export default function CassaScreen() {
 
   // Chiusura cassa modal
   const [showChiusuraModal, setShowChiusuraModal] = useState(false);
-  const [incassatoOperatore, setIncassatoOperatore] = useState('');
+  const [incassatoPos, setIncassatoPos] = useState('');
+  const [incassatoContanti, setIncassatoContanti] = useState('');
+  const [spese, setSpese] = useState('');
+  const [scontiCassa, setScontiCassa] = useState('');
+  const [buoni, setBuoni] = useState('');
+  const [restituiti, setRestituiti] = useState('');
   const [chiudendo, setChiudendo] = useState(false);
   const [chiusuraError, setChiusuraError] = useState<string | null>(null);
   const [totaleGiornaliero, setTotaleGiornaliero] = useState(0);
@@ -258,7 +263,12 @@ export default function CassaScreen() {
   const handleOpenChiusura = async () => {
     console.log('[Cassa] Chiusura Cassa button pressed — storeId:', storeId);
     setChiusuraError(null);
-    setIncassatoOperatore('');
+    setIncassatoPos('');
+    setIncassatoContanti('');
+    setSpese('');
+    setScontiCassa('');
+    setBuoni('');
+    setRestituiti('');
     const today = new Date();
     const isoToday = today.toISOString().split('T')[0];
     const tomorrow = new Date(today.getTime() + 86400000).toISOString().split('T')[0];
@@ -287,43 +297,43 @@ export default function CassaScreen() {
   };
 
   const handleConfermaChiusura = async () => {
-    console.log('[Cassa] Conferma Chiusura pressed — incassato operatore:', incassatoOperatore, 'storeId:', storeId);
-    if (!incassatoOperatore.trim()) {
-      setChiusuraError("Inserisci l'importo incassato");
-      return;
-    }
-    const incassato = Number(incassatoOperatore.replace(',', '.'));
-    if (isNaN(incassato)) {
-      setChiusuraError('Importo non valido');
-      return;
-    }
+    const toNum = (v: string) => Number(v.replace(',', '.')) || 0;
+    const pos = toNum(incassatoPos);
+    const contanti = toNum(incassatoContanti);
+    const speseVal = toNum(spese);
+    const scontiVal = toNum(scontiCassa);
+    const buoniVal = toNum(buoni);
+    const restituitiVal = toNum(restituiti);
+
+    // Totale operatore = POS + Contanti - Spese - Sconti - Buoni - Restituiti
+    const totaleOperatore = pos + contanti - speseVal - scontiVal - buoniVal - restituitiVal;
+    const diff = totaleOperatore - totaleGiornaliero;
+
+    console.log('[Cassa] Conferma Chiusura pressed — pos:', pos, 'contanti:', contanti, 'spese:', speseVal, 'sconti:', scontiVal, 'buoni:', buoniVal, 'restituiti:', restituitiVal, 'totaleOperatore:', totaleOperatore, 'diff:', diff, 'storeId:', storeId);
+
     setChiudendo(true);
     setChiusuraError(null);
     try {
-      const insertPayload: Record<string, unknown> = {
+      const { error } = await db.from('chiusure_cassa').insert({
         store_id: storeId,
         data: new Date().toISOString().split('T')[0],
         venduto_calcolato: totaleGiornaliero,
-        incassato_operatore: incassato,
-        differenza: incassato - totaleGiornaliero,
-      };
-
-      const { error } = await db.from('chiusure_cassa').insert(insertPayload);
-      if (error) {
-        // Se l'errore è sulla colonna store_id (non esiste), riprova senza
-        if (error.message?.includes('store_id') && storeId) {
-          console.log('[Cassa] store_id column not found in chiusure_cassa, retrying without it');
-          delete insertPayload.store_id;
-          const { error: error2 } = await db.from('chiusure_cassa').insert(insertPayload);
-          if (error2) throw error2;
-        } else {
-          throw error;
-        }
-      }
-
-      console.log('[Cassa] Chiusura cassa salvata — calcolato:', totaleGiornaliero, 'incassato:', incassato, 'store:', storeId);
+        incassato_operatore: totaleOperatore,
+        incassato_pos: pos,
+        incassato_contanti: contanti,
+        spese: speseVal,
+        sconti: scontiVal,
+        buoni: buoniVal,
+        restituiti: restituitiVal,
+      });
+      if (error) throw error;
+      console.log('[Cassa] Chiusura cassa salvata — calcolato:', totaleGiornaliero, 'totaleOperatore:', totaleOperatore, 'diff:', diff, 'store:', storeId);
       setShowChiusuraModal(false);
-      Alert.alert('Chiusura completata', `Totale calcolato: ${formatCurrency(totaleGiornaliero)}\nIncassato: ${formatCurrency(incassato)}`);
+      const diffLabel = diff >= 0 ? `+${formatCurrency(diff)}` : formatCurrency(diff);
+      Alert.alert(
+        diff === 0 ? 'Chiusura OK ✓' : diff > 0 ? 'Chiusura con eccedenza' : 'Chiusura con ammanco',
+        `Venduto calcolato: ${formatCurrency(totaleGiornaliero)}\nTotale operatore: ${formatCurrency(totaleOperatore)}\nDifferenza: ${diffLabel}`
+      );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Errore durante la chiusura';
       console.error('[Cassa] chiusura error:', msg);
@@ -608,33 +618,58 @@ export default function CassaScreen() {
             ) : null}
 
             {/* Totale calcolato */}
-            <View style={{
-              backgroundColor: COLORS.primaryMuted, borderRadius: 14, padding: 18, marginBottom: 20,
-              borderWidth: 1, borderColor: COLORS.primary, alignItems: 'center',
-            }}>
-              <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.primary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
-                Totale Giornaliero Calcolato
-              </Text>
-              <Text style={{ fontSize: 32, fontWeight: '800', color: COLORS.primary, letterSpacing: -0.5 }}>
-                {formatCurrency(totaleGiornaliero)}
-              </Text>
+            <View style={{ backgroundColor: COLORS.primaryMuted, borderRadius: 14, padding: 18, marginBottom: 20, borderWidth: 1, borderColor: COLORS.primary, alignItems: 'center' }}>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.primary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Venduto Calcolato</Text>
+              <Text style={{ fontSize: 32, fontWeight: '800', color: COLORS.primary, letterSpacing: -0.5 }}>{formatCurrency(totaleGiornaliero)}</Text>
             </View>
 
-            <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-              Importo Incassato dall'Operatore *
-            </Text>
-            <TextInput
-              value={incassatoOperatore}
-              onChangeText={setIncassatoOperatore}
-              placeholder="es. 1250.00"
-              placeholderTextColor={COLORS.textTertiary}
-              keyboardType="decimal-pad"
-              style={{
-                backgroundColor: COLORS.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13,
-                fontSize: 18, color: COLORS.text, borderWidth: 1, borderColor: COLORS.border, marginBottom: 24,
-                fontWeight: '600',
-              }}
-            />
+            {/* Campi incasso */}
+            {[
+              { label: 'Incassato POS', value: incassatoPos, setter: setIncassatoPos },
+              { label: 'Incassato Contanti', value: incassatoContanti, setter: setIncassatoContanti },
+              { label: 'Spese', value: spese, setter: setSpese },
+              { label: 'Sconti', value: scontiCassa, setter: setScontiCassa },
+              { label: 'Buoni', value: buoni, setter: setBuoni },
+              { label: 'Restituiti', value: restituiti, setter: setRestituiti },
+            ].map(({ label, value, setter }) => {
+              const fieldKey = label;
+              return (
+                <View key={fieldKey} style={{ marginBottom: 14 }}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>{label}</Text>
+                  <TextInput
+                    value={value}
+                    onChangeText={(text) => { console.log('[Cassa] chiusura field changed —', label, ':', text); setter(text); }}
+                    placeholder="0.00"
+                    placeholderTextColor={COLORS.textTertiary}
+                    keyboardType="decimal-pad"
+                    style={{ backgroundColor: COLORS.surface, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13, fontSize: 16, color: COLORS.text, borderWidth: 1, borderColor: COLORS.border, fontWeight: '600' }}
+                  />
+                </View>
+              );
+            })}
+
+            {/* Totale operatore calcolato in tempo reale */}
+            {(() => {
+              const toNum = (v: string) => Number(v.replace(',', '.')) || 0;
+              const totOp = toNum(incassatoPos) + toNum(incassatoContanti) - toNum(spese) - toNum(scontiCassa) - toNum(buoni) - toNum(restituiti);
+              const diff = totOp - totaleGiornaliero;
+              const isOk = Math.abs(diff) < 0.01;
+              const isPos = diff > 0.01;
+              return (
+                <View style={{ backgroundColor: isOk ? COLORS.statusCompletedBg : isPos ? COLORS.statusImportedBg : COLORS.dangerMuted, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: isOk ? COLORS.statusCompleted : isPos ? COLORS.statusImported : COLORS.danger }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 13, color: COLORS.textSecondary }}>Totale operatore</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.text }}>{formatCurrency(totOp)}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={{ fontSize: 13, color: COLORS.textSecondary }}>Differenza</Text>
+                    <Text style={{ fontSize: 15, fontWeight: '800', color: isOk ? COLORS.statusCompleted : isPos ? COLORS.statusImported : COLORS.danger }}>
+                      {isOk ? '✓ Quadra' : (diff > 0 ? '+' : '') + formatCurrency(diff)}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })()}
 
             {chiusuraError ? (
               <View style={{ backgroundColor: COLORS.dangerMuted, borderRadius: 10, padding: 12, marginBottom: 16 }}>
@@ -643,12 +678,7 @@ export default function CassaScreen() {
             ) : null}
 
             <AnimatedPressable onPress={handleConfermaChiusura} style={{ opacity: chiudendo ? 0.7 : 1 }}>
-              <View style={{
-                backgroundColor: COLORS.warning, borderRadius: 14, paddingVertical: 16,
-                alignItems: 'center', justifyContent: 'center',
-                shadowColor: COLORS.warning, shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
-              }}>
+              <View style={{ backgroundColor: COLORS.warning, borderRadius: 14, paddingVertical: 16, alignItems: 'center', justifyContent: 'center', shadowColor: COLORS.warning, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 8, elevation: 4 }}>
                 {chiudendo
                   ? <ActivityIndicator color="#fff" size="small" />
                   : <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Salva Chiusura Cassa</Text>
