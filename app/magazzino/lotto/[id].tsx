@@ -10,7 +10,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { Layers, ArrowLeft, Store, X, Check, ShoppingCart } from 'lucide-react-native';
+import { Layers, ArrowLeft, Store, X, Check, Package } from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { SkeletonList } from '@/components/SkeletonLoader';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
@@ -82,7 +82,7 @@ function AnimatedListItem({ index, children }: { index: number; children: React.
       Animated.timing(opacity, { toValue: 1, duration: 300, delay: index * 50, useNativeDriver: true }),
       Animated.timing(translateY, { toValue: 0, duration: 300, delay: index * 50, useNativeDriver: true }),
     ]).start();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return <Animated.View style={{ opacity, transform: [{ translateY }] }}>{children}</Animated.View>;
 }
 
@@ -189,14 +189,6 @@ export default function DettaglioLottoScreen() {
     }
   };
 
-  // ── Inizia Scarico ─────────────────────────────────────────────────────────
-
-  const handleIniziaScarico = () => {
-    if (!lotto) return;
-    console.log('[DettaglioLotto] "Inizia Scarico" button pressed for lotto:', lotto.id);
-    router.push({ pathname: '/magazzino/scarico', params: { lotto_id: lotto.id } } as any);
-  };
-
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const renderArticolo = useCallback(({ item, index }: { item: LottoArticolo; index: number }) => {
@@ -225,7 +217,7 @@ export default function DettaglioLottoScreen() {
           }}>
             {isVenduto
               ? <Check size={16} color={COLORS.primary} />
-              : <ShoppingCart size={16} color={COLORS.primary} />
+              : <Package size={16} color={COLORS.primary} />
             }
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -332,21 +324,6 @@ export default function DettaglioLottoScreen() {
                 }}>
                   <Store size={18} color="#fff" />
                   <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Carica a Store</Text>
-                </View>
-              </AnimatedPressable>
-            )}
-
-            {lotto.stato === 'caricato' && (
-              <AnimatedPressable onPress={handleIniziaScarico}>
-                <View style={{
-                  backgroundColor: COLORS.warning, borderRadius: 14, paddingVertical: 15,
-                  alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8,
-                  marginBottom: 12,
-                  shadowColor: COLORS.warning, shadowOffset: { width: 0, height: 4 },
-                  shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
-                }}>
-                  <ShoppingCart size={18} color="#fff" />
-                  <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Inizia Scarico</Text>
                 </View>
               </AnimatedPressable>
             )}

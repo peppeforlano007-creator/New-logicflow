@@ -441,7 +441,7 @@ export default function ScaricaScreen() {
                 {filteredArticoli.length > 0 && (
                   <AnimatedPressable onPress={() => {
                     console.log('[Scarico] toggle all pressed — allSelected:', allSelected);
-                    allSelected ? deselectAll() : selectAll();
+                    if (allSelected) { deselectAll(); } else { selectAll(); }
                   }}>
                     <View style={{
                       backgroundColor: COLORS.primaryMuted, borderRadius: 8,

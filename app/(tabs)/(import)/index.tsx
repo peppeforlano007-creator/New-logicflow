@@ -42,7 +42,7 @@ function AnimatedListItem({ index, children }: { index: number; children: React.
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Animated.View style={{ opacity, transform: [{ translateY }] }}>
