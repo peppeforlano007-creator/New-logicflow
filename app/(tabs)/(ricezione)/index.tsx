@@ -31,11 +31,6 @@ interface SessionLogEntry {
   timestamp: Date;
 }
 
-interface ActiveFileData {
-  file: SupplierFile;
-  items: SupplierItem[];
-}
-
 // ─── Session Log Row ──────────────────────────────────────────────────────────
 
 function SessionLogRow({ entry }: { entry: SessionLogEntry }) {
@@ -89,7 +84,9 @@ function SessionLogRow({ entry }: { entry: SessionLogEntry }) {
 export default function RicezioneScreen() {
   const { toast, showToast, hideToast } = useToast();
 
-  const [activeFiles, setActiveFiles] = useState<ActiveFileData[]>([]);
+  const [activeFiles, setActiveFiles] = useState<SupplierFile[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
+  const [receivedItems, setReceivedItems] = useState(0);
   const [loading, setLoading] = useState(true);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [processingCode, setProcessingCode] = useState(false);
@@ -125,43 +122,43 @@ export default function RicezioneScreen() {
 
       if (activeFileList.length === 0) {
         setActiveFiles([]);
+        setTotalItems(0);
+        setReceivedItems(0);
         setLoading(false);
         return;
       }
 
       const fileIds = activeFileList.map(f => f.id);
-      const PAGE_SIZE = 1000;
-      let allItems: SupplierItem[] = [];
-      let from = 0;
-      let hasMore = true;
 
-      while (hasMore) {
-        const { data: page, error: itemsError } = await db
+      // Fetch totals from the view and received count in parallel
+      const [progressResult, receivedResult] = await Promise.all([
+        db
+          .from('supplier_file_progress')
+          .select('file_id, total_items, completed_items')
+          .in('file_id', fileIds),
+        db
           .from('supplier_items')
-          .select('id, file_id, item_code, original_data, extra_data, status')
+          .select('id', { count: 'exact', head: true })
           .in('file_id', fileIds)
-          .range(from, from + PAGE_SIZE - 1);
+          .eq('extra_data->>received', 'true'),
+      ]);
 
-        if (itemsError) {
-          console.error('[Ricezione] loadActiveFiles items error:', itemsError);
-          throw itemsError;
-        }
-
-        const pageData = (page ?? []) as SupplierItem[];
-        allItems = [...allItems, ...pageData];
-        hasMore = pageData.length === PAGE_SIZE;
-        from += PAGE_SIZE;
-        console.log('[Ricezione] Items page fetched:', pageData.length, '| total so far:', allItems.length);
+      if (progressResult.error) {
+        console.error('[Ricezione] loadActiveFiles progress error:', progressResult.error);
+      }
+      if (receivedResult.error) {
+        console.error('[Ricezione] loadActiveFiles receivedCount error:', receivedResult.error);
       }
 
-      console.log('[Ricezione] Total items loaded:', allItems.length);
+      const progressRows = (progressResult.data ?? []) as { file_id: string; total_items: number; completed_items: number }[];
+      const total = progressRows.reduce((sum, r) => sum + (r.total_items ?? 0), 0);
+      const received = receivedResult.count ?? 0;
 
-      const result: ActiveFileData[] = activeFileList.map(file => ({
-        file,
-        items: allItems.filter(i => i.file_id === file.id),
-      }));
+      console.log('[Ricezione] Progress loaded — total:', total, '| received:', received);
 
-      setActiveFiles(result);
+      setActiveFiles(activeFileList);
+      setTotalItems(total);
+      setReceivedItems(received);
     } catch (err) {
       console.error('[Ricezione] loadActiveFiles exception:', err);
     } finally {
@@ -220,22 +217,28 @@ export default function RicezioneScreen() {
       console.log('[Ricezione] processCode start:', trimmed, '| selectedColumn:', selectedColumn);
 
       try {
-        const normalizedCode = trimmed.toLowerCase();
+        const activeFileIds = activeFiles.map(f => f.id);
 
-        // Gather all items from all active files
-        const allItems: (SupplierItem & { _file: SupplierFile })[] = [];
-        for (const { file, items } of activeFiles) {
-          for (const item of items) {
-            allItems.push({ ...item, _file: file });
-          }
+        if (activeFileIds.length === 0) {
+          console.log('[Ricezione] No active files, skipping search');
+          showToast('Nessun file attivo', 'error');
+          return;
         }
 
-        // Search by the selected column only
-        const matched = allItems.filter(item => {
-          const val = (item.original_data ?? {})[selectedColumn];
-          return String(val ?? '').trim().toLowerCase() === normalizedCode;
-        });
+        // Query DB directly for matching items
+        console.log('[Ricezione] Querying DB for code:', trimmed, '| column:', selectedColumn, '| fileIds:', activeFileIds.length);
+        const { data: matchedRaw, error: searchError } = await db
+          .from('supplier_items')
+          .select('id, file_id, item_code, original_data, extra_data, status')
+          .in('file_id', activeFileIds)
+          .eq(`original_data->>${selectedColumn}`, trimmed);
 
+        if (searchError) {
+          console.error('[Ricezione] processCode search error:', searchError);
+          throw searchError;
+        }
+
+        const matched = (matchedRaw ?? []) as SupplierItem[];
         console.log('[Ricezione] processCode matched:', matched.length, 'items for code:', trimmed, '| column:', selectedColumn);
 
         const logId = `${Date.now()}-${Math.random()}`;
@@ -265,14 +268,19 @@ export default function RicezioneScreen() {
           return;
         }
 
+        // Build a map of file_id -> SupplierFile for involved files
+        const activeFileMap = new Map<string, SupplierFile>(activeFiles.map(f => [f.id, f]));
+
         // Group matched items by file
-        const fileMap = new Map<string, { file: SupplierFile; items: typeof matched }>();
+        const fileMap = new Map<string, { file: SupplierFile; items: SupplierItem[] }>();
         for (const item of matched) {
+          const file = activeFileMap.get(item.file_id);
+          if (!file) continue;
           const existing = fileMap.get(item.file_id);
           if (existing) {
             existing.items.push(item);
           } else {
-            fileMap.set(item.file_id, { file: item._file, items: [item] });
+            fileMap.set(item.file_id, { file, items: [item] });
           }
         }
 
@@ -323,25 +331,21 @@ export default function RicezioneScreen() {
           }
         }
 
-        // Optimistic local update
-        const matchedIds = new Set(matched.map(m => m.id));
+        // Optimistic local update — file status only
         const involvedFileIds = new Set(fileMap.keys());
         setActiveFiles(prev =>
-          prev.map(({ file, items }) => ({
-            file: involvedFileIds.has(file.id) && file.status !== 'processing' && file.status !== 'received' && file.status !== 'completed'
-              ? { ...file, status: 'processing' as any }
+          prev.map(file =>
+            involvedFileIds.has(file.id) && file.status !== 'processing' && file.status !== 'received' && file.status !== 'completed'
+              ? { ...file, status: 'processing' as SupplierFile['status'] }
               : file,
-            items: items.map(item => {
-              if (!matchedIds.has(item.id)) return item;
-              return {
-                ...item,
-                status: 'processing' as const,
-                original_data: { ...item.original_data, AdjReason: '' },
-                extra_data: { ...item.extra_data, received: 'true', received_at: now },
-              };
-            }),
-          })),
+          ),
         );
+
+        // Optimistic progress update
+        const newlyReceived = matched.filter(item => item.extra_data?.received !== 'true').length;
+        if (newlyReceived > 0) {
+          setReceivedItems(prev => prev + newlyReceived);
+        }
 
         const fileNames = Array.from(fileMap.values()).map(v => v.file.file_name);
         const countLabel = matched.length === 1 ? '1 articolo ricevuto' : `${matched.length} articoli ricevuti`;
@@ -411,12 +415,6 @@ export default function RicezioneScreen() {
 
   // ── Derived: global progress ───────────────────────────────────────────────
 
-  let totalItems = 0;
-  let receivedItems = 0;
-  for (const { items } of activeFiles) {
-    totalItems += items.length;
-    receivedItems += items.filter(i => i.extra_data?.received === 'true').length;
-  }
   const progressRatio = totalItems > 0 ? receivedItems / totalItems : 0;
   const progressPercent = Math.round(progressRatio * 100);
   const progressLabel = `${receivedItems} articoli ricevuti su ${totalItems} totali`;
