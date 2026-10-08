@@ -86,6 +86,8 @@ export default function ImportScreen() {
   const [previewCols, setPreviewCols] = useState<string[]>([]);
   const [quantitaColumn, setQuantitaColumn] = useState<string | null>(null);
   const [showQtyPicker, setShowQtyPicker] = useState(false);
+  const [identificatoreColumn, setIdentificatoreColumn] = useState<string | null>(null);
+  const [showIdentPicker, setShowIdentPicker] = useState(false);
 
   const fetchFiles = useCallback(async () => {
     console.log('[Import] fetchFiles called');
@@ -185,7 +187,7 @@ export default function ImportScreen() {
 
   const handleConfirmImport = useCallback(async () => {
     if (!selectedFile) return;
-    console.log('[Import] handleConfirmImport called', { fileName: selectedFile.name, importedBy, quantitaColumn });
+    console.log('[Import] handleConfirmImport called', { fileName: selectedFile.name, importedBy, quantitaColumn, identificatoreColumn });
 
     setImporting(true);
 
@@ -239,6 +241,7 @@ export default function ImportScreen() {
           extra_columns: [],
           imported_by: importedBy || null,
           status: 'imported',
+          identificatore_column: identificatoreColumn ?? null,
         })
         .select()
         .single();
@@ -255,7 +258,10 @@ export default function ImportScreen() {
       const headers: string[] = parsed.column_headers ?? [];
 
       const codeKeys = ['codice', 'code', 'cod', 'item_code', 'sku', 'articolo'];
-      const codeKey = headers.find(h => codeKeys.includes(h.toLowerCase())) ?? headers[0] ?? 'col_0';
+      const codeKey = identificatoreColumn
+        ?? headers.find(h => codeKeys.includes(h.toLowerCase()))
+        ?? headers[0]
+        ?? 'col_0';
 
       console.log('[Import] quantitaColumn selected:', quantitaColumn);
 
@@ -289,6 +295,7 @@ export default function ImportScreen() {
       setSelectedFile(null);
       setImportedBy('');
       setQuantitaColumn(null);
+      setIdentificatoreColumn(null);
       showToast(`File importato con successo (${items.length} articoli)`, 'success');
       fetchFiles();
     } catch (err: any) {
@@ -297,7 +304,7 @@ export default function ImportScreen() {
     } finally {
       setImporting(false);
     }
-  }, [selectedFile, importedBy, quantitaColumn, fetchFiles, showToast]);
+  }, [selectedFile, importedBy, quantitaColumn, identificatoreColumn, fetchFiles, showToast]);
 
   const handleDeleteFile = useCallback((fileId: string, fileName: string) => {
     console.log('[Import] handleDeleteFile called', { fileId, fileName });
@@ -503,6 +510,7 @@ export default function ImportScreen() {
           console.log('[Import] Modal closed');
           setModalVisible(false);
           setQuantitaColumn(null);
+          setIdentificatoreColumn(null);
         }}
       >
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -527,6 +535,7 @@ export default function ImportScreen() {
                 console.log('[Import] Modal dismiss button pressed');
                 setModalVisible(false);
                 setQuantitaColumn(null);
+                setIdentificatoreColumn(null);
               }}
             >
               <View
@@ -671,6 +680,39 @@ export default function ImportScreen() {
               </TouchableOpacity>
             </View>
 
+            {/* Colonna Identificatore */}
+            <View style={{ gap: 6 }}>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.text }}>
+                Colonna Identificatore
+              </Text>
+              <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>
+                Colonna usata come codice univoco articolo (EAN, LPN, SKU…)
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  console.log('[Import] Colonna Identificatore picker opened, previewCols:', previewCols);
+                  setShowIdentPicker(true);
+                }}
+                activeOpacity={0.8}
+                style={{
+                  backgroundColor: COLORS.surface,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: identificatoreColumn ? COLORS.primary : COLORS.border,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <Text style={{ fontSize: 15, color: identificatoreColumn ? COLORS.text : COLORS.textTertiary }}>
+                  {identificatoreColumn ?? 'Auto-rileva'}
+                </Text>
+                <ChevronDown size={16} color={COLORS.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
             {/* Confirm button */}
             <AnimatedPressable
               onPress={handleConfirmImport}
@@ -752,6 +794,86 @@ export default function ImportScreen() {
                   <Text style={{ fontSize: 15, fontWeight: isSelected ? '600' : '400', color: isSelected ? COLORS.primary : COLORS.text }}>
                     {opt}
                   </Text>
+                  {isSelected && <Check size={16} color={COLORS.primary} />}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      {/* Identificatore Column Picker Modal */}
+      <Modal
+        visible={showIdentPicker}
+        animationType="slide"
+        presentationStyle="formSheet"
+        onRequestClose={() => setShowIdentPicker(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: COLORS.background }}>
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+            padding: 20, paddingTop: 24,
+            borderBottomWidth: 1, borderBottomColor: COLORS.border,
+            backgroundColor: COLORS.surface,
+          }}>
+            <Text style={{ fontSize: 17, fontWeight: '700', color: COLORS.text }}>Colonna Identificatore</Text>
+            <AnimatedPressable onPress={() => { console.log('[Import] ident picker dismissed'); setShowIdentPicker(false); }}>
+              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.surfaceSecondary, alignItems: 'center', justifyContent: 'center' }}>
+                <X size={16} color={COLORS.textSecondary} />
+              </View>
+            </AnimatedPressable>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            {['Auto-rileva', ...previewCols].map(opt => {
+              const isAuto = opt === 'Auto-rileva';
+              const isSelected = isAuto ? identificatoreColumn === null : identificatoreColumn === opt;
+              const lowerOpt = opt.toLowerCase();
+              const badgeLabel = lowerOpt.includes('ean') ? 'EAN'
+                : lowerOpt.includes('lpn') ? 'LPN'
+                : lowerOpt.includes('sku') ? 'SKU'
+                : lowerOpt.includes('barcode') ? 'BARCODE'
+                : lowerOpt.includes('codice') ? 'CODICE'
+                : null;
+              const badgeColor = badgeLabel === 'EAN' ? '#16A34A'
+                : badgeLabel === 'LPN' ? '#2563EB'
+                : '#6B7280';
+              const badgeBg = badgeLabel === 'EAN' ? '#DCFCE7'
+                : badgeLabel === 'LPN' ? '#DBEAFE'
+                : '#F3F4F6';
+              return (
+                <TouchableOpacity
+                  key={opt}
+                  onPress={() => {
+                    const val = isAuto ? null : opt;
+                    console.log('[Import] identificatoreColumn selected:', val);
+                    setIdentificatoreColumn(val);
+                    setShowIdentPicker(false);
+                  }}
+                  activeOpacity={0.8}
+                  style={{
+                    backgroundColor: isSelected ? COLORS.primaryMuted : COLORS.surface,
+                    borderRadius: 12,
+                    padding: 14,
+                    marginBottom: 8,
+                    borderWidth: 1,
+                    borderColor: isSelected ? COLORS.primary : COLORS.border,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ fontSize: 15, fontWeight: isSelected ? '600' : '400', color: isSelected ? COLORS.primary : COLORS.text }}>
+                      {opt}
+                    </Text>
+                    {badgeLabel && !isAuto ? (
+                      <View style={{ backgroundColor: badgeBg, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Text style={{ fontSize: 11, fontWeight: '600', color: badgeColor }}>
+                          {badgeLabel}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
                   {isSelected && <Check size={16} color={COLORS.primary} />}
                 </TouchableOpacity>
               );
