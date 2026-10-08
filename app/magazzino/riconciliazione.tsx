@@ -162,7 +162,7 @@ export default function RiconciliazioneScreen() {
       const { data: chiusure, error: chiErr } = await db
         .from('chiusure_cassa')
         .select('incassato_operatore')
-        .gte('created_at', isoInizio)
+        .gte('created_at', dateFrom + 'T00:00:00')
         .lt('created_at', isoFine);
 
       if (chiErr) throw chiErr;
