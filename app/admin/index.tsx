@@ -26,6 +26,8 @@ const TAB_PERMISSIONS = [
   { key: 'lavorazione', label: 'Lavorazione' },
   { key: 'magazzino', label: 'Magazzino' },
   { key: 'export', label: 'Export' },
+  { key: 'cassa', label: 'Cassa' },
+  { key: 'store_manager', label: 'Store Manager' },
 ];
 
 interface AdminUser {
