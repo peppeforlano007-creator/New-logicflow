@@ -1,30 +1,39 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   FlatList,
   TextInput,
   ActivityIndicator,
-  Alert,
   Modal,
   Platform,
   TouchableOpacity,
 } from 'react-native';
-import { Stack, useRouter } from 'expo-router';
-import { Camera, ArrowLeft, Package, Trash2, CheckCircle, ChevronDown, Search, X } from 'lucide-react-native';
+import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
+import {
+  ArrowLeft,
+  Package,
+  Camera,
+  ChevronDown,
+  Search,
+  X,
+  TrendingDown,
+} from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
 import { ScannerModal } from '@/components/ScannerModal';
+import { ToastMessage, useToast } from '@/components/ToastMessage';
 import { db } from '@/utils/db';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface ScannedItem {
+interface StoreArticolo {
   id: string;
   item_code: string;
   identifier: string;
   desc: string;
-  lotto_provenienza: string | null;
+  codice_lotto: string;
+  lotto_id: string;
 }
 
 type Lotto = {
@@ -53,23 +62,108 @@ function LottoStatoBadge({ stato }: { stato: string }) {
 
 export default function ScaricaScreen() {
   const router = useRouter();
+  const { store_id, store_nome } = useLocalSearchParams<{ store_id: string; store_nome: string }>();
 
-  const [scannerVisible, setScannerVisible] = useState(false);
+  const { toast, showToast, hideToast } = useToast();
+
+  // Store articles
+  const [storeArticoli, setStoreArticoli] = useState<StoreArticolo[]>([]);
+  const [loadingArticoli, setLoadingArticoli] = useState(true);
+
+  // Search / filter
   const [searchQuery, setSearchQuery] = useState('');
-  const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
 
-  // Nuovo lotto destinazione
+  // Selection
+  const [selectedSet, setSelectedSet] = useState<Set<string>>(new Set());
+
+  // Scanner
+  const [scannerVisible, setScannerVisible] = useState(false);
+
+  // Lotto destinazione
   const [nuovoLotto, setNuovoLotto] = useState<Lotto | null>(null);
   const [lottiDisponibili, setLottiDisponibili] = useState<Lotto[]>([]);
   const [lottoModalVisible, setLottoModalVisible] = useState(false);
   const [lottoSearch, setLottoSearch] = useState('');
   const [loadingLotti, setLoadingLotti] = useState(false);
 
-  // ── Load lotti at mount ──────────────────────────────────────────────────────
+  // Confirming
+  const [confirming, setConfirming] = useState(false);
+
+  // ── Load store articles ──────────────────────────────────────────────────────
+  const fetchStoreArticoli = useCallback(async () => {
+    if (!store_id) return;
+    console.log('[Scarico] fetchStoreArticoli called for store_id:', store_id);
+    setLoadingArticoli(true);
+    try {
+      const { data: lottiStore, error: lottiErr } = await db
+        .from('lotti')
+        .select('id, codice_lotto')
+        .eq('store_id', store_id)
+        .eq('stato', 'caricato');
+
+      if (lottiErr) {
+        console.error('[Scarico] fetchStoreArticoli lotti error:', lottiErr);
+        return;
+      }
+
+      const lottiIds = (lottiStore ?? []).map((l: { id: string; codice_lotto: string }) => l.id);
+      console.log('[Scarico] lotti caricati trovati:', lottiIds.length);
+
+      if (lottiIds.length === 0) {
+        setStoreArticoli([]);
+        return;
+      }
+
+      const lottoMap: Record<string, string> = {};
+      (lottiStore ?? []).forEach((l: { id: string; codice_lotto: string }) => {
+        lottoMap[l.id] = l.codice_lotto;
+      });
+
+      const { data: articoli, error: artErr } = await db
+        .from('supplier_items')
+        .select('id, item_code, original_data, extra_data, lotto_id')
+        .in('lotto_id', lottiIds);
+
+      if (artErr) {
+        console.error('[Scarico] fetchStoreArticoli articoli error:', artErr);
+        return;
+      }
+
+      const mapped: StoreArticolo[] = (articoli ?? []).map((a: {
+        id: string;
+        item_code: string;
+        original_data: Record<string, unknown> | null;
+        extra_data: Record<string, unknown> | null;
+        lotto_id: string;
+      }) => {
+        const od = a.original_data ?? {};
+        const identifier =
+          (od['PkgID'] as string | undefined) ??
+          (od['LPN'] as string | undefined) ??
+          a.item_code;
+        const descKey = Object.keys(od).find(k => k.toLowerCase() === 'itemdesc');
+        const desc = descKey ? String(od[descKey] ?? '—') : '—';
+        return {
+          id: a.id,
+          item_code: a.item_code,
+          identifier,
+          desc,
+          codice_lotto: lottoMap[a.lotto_id] ?? '—',
+          lotto_id: a.lotto_id,
+        };
+      });
+
+      console.log('[Scarico] articoli caricati:', mapped.length);
+      setStoreArticoli(mapped);
+    } catch (err) {
+      console.error('[Scarico] fetchStoreArticoli exception:', err);
+    } finally {
+      setLoadingArticoli(false);
+    }
+  }, [store_id]);
+
+  // ── Load lotti ───────────────────────────────────────────────────────────────
   const fetchLotti = useCallback(async () => {
     console.log('[Scarico] fetchLotti called');
     setLoadingLotti(true);
@@ -90,81 +184,45 @@ export default function ScaricaScreen() {
   }, []);
 
   useEffect(() => {
+    fetchStoreArticoli();
     fetchLotti();
-  }, [fetchLotti]);
+  }, [fetchStoreArticoli, fetchLotti]);
 
-  // ── Lookup item ──────────────────────────────────────────────────────────────
-  const lookupItem = useCallback(async (code: string) => {
-    const trimmed = code.trim();
-    if (!trimmed) return;
-    console.log('[Scarico] lookupItem called for code:', trimmed);
-    setSearching(true);
-    setSearchError(null);
-    try {
-      const { data, error } = await db
-        .from('supplier_items')
-        .select('id, item_code, original_data, extra_data, lotto_id')
-        .or(`item_code.eq.${trimmed},original_data->>PkgID.eq.${trimmed},original_data->>LPN.eq.${trimmed}`)
-        .limit(1)
-        .single();
-
-      if (error || !data) {
-        console.log('[Scarico] item not found for code:', trimmed);
-        setSearchError(`Articolo non trovato: ${trimmed}`);
-        return;
-      }
-
-      const identifier =
-        data.original_data?.['PkgID'] ??
-        data.original_data?.['LPN'] ??
-        data.item_code;
-      const descKey = Object.keys(data.original_data ?? {}).find(
-        (k: string) => k.toLowerCase() === 'itemdesc'
+  // ── Filtered articles ────────────────────────────────────────────────────────
+  const queryLower = searchQuery.toLowerCase().trim();
+  const filteredArticoli = queryLower === ''
+    ? storeArticoli
+    : storeArticoli.filter(a =>
+        a.identifier.toLowerCase().includes(queryLower) ||
+        a.item_code.toLowerCase().includes(queryLower) ||
+        a.desc.toLowerCase().includes(queryLower)
       );
-      const desc = descKey ? ((data.original_data ?? {})[descKey] || '—') : '—';
 
-      // Check duplicate
-      if (scannedItems.some(i => i.id === data.id)) {
-        console.log('[Scarico] item already scanned:', identifier);
-        setSearchError(`Articolo già scansionato: ${identifier}`);
-        return;
+  // ── Selection helpers ────────────────────────────────────────────────────────
+  const toggleItem = (id: string) => {
+    console.log('[Scarico] toggleItem:', id);
+    setSelectedSet(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
       }
-
-      // Fetch lotto provenienza if present
-      let lotto_provenienza: string | null = null;
-      if (data.lotto_id) {
-        console.log('[Scarico] fetching lotto provenienza for lotto_id:', data.lotto_id);
-        const { data: lottoData } = await db
-          .from('lotti')
-          .select('codice_lotto')
-          .eq('id', data.lotto_id)
-          .single();
-        lotto_provenienza = lottoData?.codice_lotto ?? null;
-        console.log('[Scarico] lotto provenienza:', lotto_provenienza);
-      }
-
-      const newItem: ScannedItem = {
-        id: data.id,
-        item_code: data.item_code,
-        identifier,
-        desc,
-        lotto_provenienza,
-      };
-      console.log('[Scarico] item added to list:', identifier, 'lotto_provenienza:', lotto_provenienza);
-      setScannedItems(prev => [newItem, ...prev]);
-      setSearchQuery('');
-    } catch (err) {
-      console.error('[Scarico] lookupItem exception:', err);
-      setSearchError('Errore durante la ricerca');
-    } finally {
-      setSearching(false);
-    }
-  }, [scannedItems]);
-
-  const handleRemoveItem = (id: string) => {
-    console.log('[Scarico] remove item pressed, id:', id);
-    setScannedItems(prev => prev.filter(i => i.id !== id));
+      return next;
+    });
   };
+
+  const selectAll = () => {
+    console.log('[Scarico] selectAll pressed — filteredArticoli:', filteredArticoli.length);
+    setSelectedSet(new Set(filteredArticoli.map(a => a.id)));
+  };
+
+  const deselectAll = () => {
+    console.log('[Scarico] deselectAll pressed');
+    setSelectedSet(new Set());
+  };
+
+  const allSelected = filteredArticoli.length > 0 && filteredArticoli.every(a => selectedSet.has(a.id));
 
   // ── Lotto selector ───────────────────────────────────────────────────────────
   const lottoSearchLower = lottoSearch.toLowerCase();
@@ -182,122 +240,253 @@ export default function ScaricaScreen() {
     setLottoSearch('');
   };
 
+  // ── Scanner barcode lookup ───────────────────────────────────────────────────
+  const handleBarcodeScan = (code: string) => {
+    console.log('[Scarico] barcode scanned:', code);
+    setScannerVisible(false);
+    const trimmed = code.trim();
+    const found = storeArticoli.find(a =>
+      a.item_code === trimmed ||
+      (a.identifier === trimmed)
+    );
+    if (found) {
+      console.log('[Scarico] barcode match found:', found.identifier);
+      setSelectedSet(prev => {
+        const next = new Set(prev);
+        next.add(found.id);
+        return next;
+      });
+      showToast(`Articolo selezionato: ${found.identifier}`, 'success');
+    } else {
+      console.log('[Scarico] barcode not found in store:', trimmed);
+      showToast('Articolo non trovato in questo store', 'error');
+    }
+  };
+
   // ── Conferma scarico ─────────────────────────────────────────────────────────
   const handleConfermaScario = async () => {
-    if (scannedItems.length === 0) {
-      Alert.alert('Nessun articolo', 'Scansiona almeno un articolo prima di confermare.');
-      return;
-    }
-    if (!nuovoLotto) {
-      Alert.alert('Lotto mancante', 'Seleziona un lotto di destinazione prima di confermare.');
-      return;
-    }
-    console.log('[Scarico] Conferma Scarico pressed — items:', scannedItems.length, 'nuovoLotto:', nuovoLotto.codice_lotto);
+    const selectedIds = [...selectedSet];
+    console.log('[Scarico] Conferma Scarico pressed — items:', selectedIds.length, 'nuovoLotto:', nuovoLotto?.codice_lotto ?? 'none');
+    if (selectedIds.length === 0 || !nuovoLotto) return;
     setConfirming(true);
     try {
-      // INSERT movimenti tipo='scarico' per ogni articolo
-      const movimenti = scannedItems.map(item => ({
-        lotto_id: nuovoLotto.id,
-        articolo_id: item.id,
-        tipo: 'scarico',
-      }));
-      console.log('[Scarico] inserting movimenti:', movimenti.length);
-      const { error: movErr } = await db.from('movimenti').insert(movimenti);
+      console.log('[Scarico] inserting movimenti:', selectedIds.length);
+      const { error: movErr } = await db.from('movimenti').insert(
+        selectedIds.map(itemId => ({
+          lotto_id: nuovoLotto.id,
+          store_id: store_id,
+          articolo_id: itemId,
+          tipo: 'scarico',
+        }))
+      );
       if (movErr) throw movErr;
 
-      // UPDATE supplier_items — sposta articoli al nuovo lotto
-      const itemIds = scannedItems.map(i => i.id);
-      console.log('[Scarico] updating supplier_items lotto_id for', itemIds.length, 'items');
+      console.log('[Scarico] updating supplier_items lotto_id for', selectedIds.length, 'items → lotto:', nuovoLotto.codice_lotto);
       const { error: siErr } = await db
         .from('supplier_items')
         .update({ lotto_id: nuovoLotto.id })
-        .in('id', itemIds);
+        .in('id', selectedIds);
       if (siErr) throw siErr;
 
-      console.log('[Scarico] Scarico completato con successo, items:', scannedItems.length, 'lotto:', nuovoLotto.codice_lotto);
-      Alert.alert(
-        'Scarico completato',
-        `${scannedItems.length} articoli spostati nel lotto ${nuovoLotto.codice_lotto}.`,
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
+      console.log('[Scarico] scarico completato — items:', selectedIds.length, 'lotto:', nuovoLotto.codice_lotto);
+      router.back();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Errore durante lo scarico';
       console.error('[Scarico] conferma error:', msg);
-      Alert.alert('Errore', msg);
+      showToast(msg, 'error');
     } finally {
       setConfirming(false);
     }
   };
 
-  // ── Render item card ─────────────────────────────────────────────────────────
-  const renderItem = ({ item }: { item: ScannedItem }) => (
-    <View style={{
-      backgroundColor: COLORS.surface,
-      borderRadius: 12,
-      padding: 14,
-      marginBottom: 8,
-      borderWidth: 1,
-      borderColor: COLORS.border,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
-    }}>
-      <View style={{
-        width: 36, height: 36, borderRadius: 9,
-        backgroundColor: COLORS.primaryMuted,
-        alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-      }}>
-        <Package size={16} color={COLORS.primary} />
-      </View>
-      <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-        <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>
-          {item.identifier}
-        </Text>
-        <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>
-          {item.desc}
-        </Text>
-        {item.lotto_provenienza ? (
-          <View style={{
-            alignSelf: 'flex-start',
-            backgroundColor: COLORS.statusImportedBg,
-            borderRadius: 5,
-            paddingHorizontal: 6,
-            paddingVertical: 2,
-            marginTop: 2,
-          }}>
-            <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.statusImported }}>
-              {item.lotto_provenienza}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-      <AnimatedPressable onPress={() => handleRemoveItem(item.id)}>
-        <View style={{
-          width: 36, height: 36, borderRadius: 9,
-          backgroundColor: COLORS.dangerMuted,
-          alignItems: 'center', justifyContent: 'center',
-        }}>
-          <Trash2 size={16} color={COLORS.danger} />
-        </View>
-      </AnimatedPressable>
-    </View>
-  );
-
-  // ── Lotto selector button ────────────────────────────────────────────────────
+  // ── Derived labels ───────────────────────────────────────────────────────────
+  const selectedCount = selectedSet.size;
+  const totalCount = filteredArticoli.length;
+  const canConfirm = selectedCount > 0 && nuovoLotto !== null;
   const lottoButtonLabel = nuovoLotto ? nuovoLotto.codice_lotto : 'Seleziona lotto destinazione...';
   const lottoButtonIsPlaceholder = !nuovoLotto;
+  const confirmLabel = `Conferma Scarico (${selectedCount})`;
+  const headerCountLabel = `${totalCount} articoli — ${selectedCount} selezionati`;
+  const toggleAllLabel = allSelected ? 'Deseleziona tutti' : 'Seleziona tutti';
+  const screenTitle = `Scarico — ${store_nome ?? ''}`;
 
-  // ── Footer: lotto selector + confirm button ──────────────────────────────────
-  const ListFooter = scannedItems.length > 0 ? (
-    <View style={{ marginTop: 8, gap: 10 }}>
-      {/* Lotto destinazione selector */}
-      <View style={{ gap: 6 }}>
-        <Text style={{
-          fontSize: 12, fontWeight: '600', color: COLORS.textSecondary,
-          textTransform: 'uppercase', letterSpacing: 0.5,
+  // ── Render article card ──────────────────────────────────────────────────────
+  const renderArticolo = ({ item }: { item: StoreArticolo }) => {
+    const isSelected = selectedSet.has(item.id);
+    return (
+      <AnimatedPressable onPress={() => toggleItem(item.id)}>
+        <View style={{
+          backgroundColor: COLORS.surface,
+          borderRadius: 12,
+          padding: 14,
+          marginBottom: 8,
+          borderWidth: 1,
+          borderColor: isSelected ? COLORS.primary : COLORS.border,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 10,
         }}>
-          Lotto destinazione
-        </Text>
+          <View style={{
+            width: 36, height: 36, borderRadius: 9,
+            backgroundColor: COLORS.primaryMuted,
+            alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            <Package size={16} color={COLORS.primary} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }} numberOfLines={1}>
+              {item.identifier}
+            </Text>
+            <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>
+              {item.desc}
+            </Text>
+            <View style={{
+              alignSelf: 'flex-start',
+              backgroundColor: COLORS.statusImportedBg,
+              borderRadius: 5,
+              paddingHorizontal: 6,
+              paddingVertical: 2,
+              marginTop: 2,
+            }}>
+              <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.statusImported }}>
+                {item.codice_lotto}
+              </Text>
+            </View>
+          </View>
+          {/* Checkbox */}
+          <View style={{
+            width: 24, height: 24, borderRadius: 7,
+            backgroundColor: isSelected ? COLORS.primary : 'transparent',
+            borderWidth: isSelected ? 0 : 2,
+            borderColor: COLORS.border,
+            alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}>
+            {isSelected && (
+              <View style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: '#fff' }} />
+            )}
+          </View>
+        </View>
+      </AnimatedPressable>
+    );
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: COLORS.background }}>
+      <Stack.Screen options={{
+        title: screenTitle,
+        headerShown: true,
+        headerLeft: () => (
+          <AnimatedPressable onPress={() => { console.log('[Scarico] back pressed'); router.back(); }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 8 }}>
+              <ArrowLeft size={20} color={COLORS.primary} />
+            </View>
+          </AnimatedPressable>
+        ),
+      }} />
+
+      <FlatList
+        data={filteredArticoli}
+        keyExtractor={item => item.id}
+        renderItem={renderArticolo}
+        contentContainerStyle={{ padding: 16, paddingBottom: 200, flexGrow: 1 }}
+        keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={
+          <View style={{ marginBottom: 12 }}>
+            {/* Search + Camera */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+              <View style={{
+                flex: 1, backgroundColor: COLORS.surface, borderRadius: 12,
+                borderWidth: 1, borderColor: COLORS.border,
+                flexDirection: 'row', alignItems: 'center',
+                paddingHorizontal: 12, paddingVertical: 10, gap: 8,
+              }}>
+                <Search size={16} color={COLORS.textSecondary} />
+                <TextInput
+                  ref={searchInputRef}
+                  value={searchQuery}
+                  onChangeText={(v) => {
+                    console.log('[Scarico] search query changed:', v);
+                    setSearchQuery(v);
+                  }}
+                  placeholder="Cerca per codice, identifier, descrizione..."
+                  placeholderTextColor={COLORS.textTertiary}
+                  style={{ flex: 1, fontSize: 14, color: COLORS.text, padding: 0 }}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                />
+                {searchQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => { console.log('[Scarico] clear search pressed'); setSearchQuery(''); }}>
+                    <X size={16} color={COLORS.textSecondary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <AnimatedPressable onPress={() => { console.log('[Scarico] scanner button pressed'); setScannerVisible(true); }}>
+                <View style={{
+                  width: 48, height: 48, borderRadius: 12,
+                  backgroundColor: COLORS.primaryMuted, alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Camera size={22} color={COLORS.primary} />
+                </View>
+              </AnimatedPressable>
+            </View>
+
+            {/* Header: count + select all */}
+            {loadingArticoli ? (
+              <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 8 }} />
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.textSecondary }}>
+                  {headerCountLabel}
+                </Text>
+                {filteredArticoli.length > 0 && (
+                  <AnimatedPressable onPress={() => {
+                    console.log('[Scarico] toggle all pressed — allSelected:', allSelected);
+                    allSelected ? deselectAll() : selectAll();
+                  }}>
+                    <View style={{
+                      backgroundColor: COLORS.primaryMuted, borderRadius: 8,
+                      paddingHorizontal: 10, paddingVertical: 5,
+                    }}>
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: COLORS.primary }}>
+                        {toggleAllLabel}
+                      </Text>
+                    </View>
+                  </AnimatedPressable>
+                )}
+              </View>
+            )}
+          </View>
+        }
+        ListEmptyComponent={
+          !loadingArticoli ? (
+            <View style={{ alignItems: 'center', paddingTop: 40, paddingHorizontal: 32 }}>
+              <View style={{
+                width: 64, height: 64, borderRadius: 18,
+                backgroundColor: COLORS.primaryMuted,
+                alignItems: 'center', justifyContent: 'center', marginBottom: 12,
+              }}>
+                <Package size={28} color={COLORS.primary} />
+              </View>
+              <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 6, textAlign: 'center' }}>
+                Nessun articolo trovato
+              </Text>
+              <Text style={{ fontSize: 13, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 18 }}>
+                {searchQuery.length > 0 ? 'Nessun articolo corrisponde alla ricerca' : 'Nessun articolo caricato in questo store'}
+              </Text>
+            </View>
+          ) : null
+        }
+      />
+
+      {/* Bottom bar: lotto selector + confirm */}
+      <View style={{
+        position: 'absolute', bottom: 0, left: 0, right: 0,
+        backgroundColor: COLORS.surface, padding: 16,
+        paddingBottom: Platform.OS === 'ios' ? 34 : 16,
+        borderTopWidth: 1, borderTopColor: COLORS.border,
+        gap: 10,
+      }}>
+        {/* Lotto destinazione selector */}
         <AnimatedPressable
           onPress={() => {
             console.log('[Scarico] lotto destinazione selector pressed');
@@ -305,19 +494,19 @@ export default function ScaricaScreen() {
           }}
         >
           <View style={{
-            backgroundColor: COLORS.surface,
+            backgroundColor: COLORS.background,
             borderRadius: 12,
             borderWidth: 1,
             borderColor: nuovoLotto ? COLORS.primary : COLORS.border,
             paddingHorizontal: 14,
-            paddingVertical: 13,
+            paddingVertical: 12,
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}>
             <View style={{ flex: 1, gap: 1 }}>
               <Text style={{
-                fontSize: 15,
+                fontSize: 14,
                 color: lottoButtonIsPlaceholder ? COLORS.textTertiary : COLORS.text,
                 fontWeight: lottoButtonIsPlaceholder ? '400' : '700',
               }} numberOfLines={1}>
@@ -335,129 +524,30 @@ export default function ScaricaScreen() {
             }
           </View>
         </AnimatedPressable>
-      </View>
-    </View>
-  ) : null;
 
-  return (
-    <View style={{ flex: 1, backgroundColor: COLORS.background }}>
-      <Stack.Screen options={{
-        title: 'Scarico Articoli',
-        headerShown: true,
-        headerLeft: () => (
-          <AnimatedPressable onPress={() => { console.log('[Scarico] back pressed'); router.back(); }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingRight: 8 }}>
-              <ArrowLeft size={20} color={COLORS.primary} />
-            </View>
-          </AnimatedPressable>
-        ),
-      }} />
-
-      <FlatList
-        data={scannedItems}
-        keyExtractor={item => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={{ padding: 16, paddingBottom: 160, flexGrow: 1 }}
-        keyboardShouldPersistTaps="handled"
-        ListHeaderComponent={
-          <View style={{ marginBottom: 16 }}>
-            {/* Scan input */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <View style={{
-                flex: 1, backgroundColor: COLORS.surface, borderRadius: 12,
-                borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 12,
-              }}>
-                <TextInput
-                  ref={searchInputRef}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  placeholder="Scansiona o inserisci codice..."
-                  placeholderTextColor={COLORS.textTertiary}
-                  style={{ fontSize: 14, color: COLORS.text, padding: 0 }}
-                  autoCorrect={false}
-                  autoCapitalize="none"
-                  returnKeyType="search"
-                  onSubmitEditing={() => {
-                    console.log('[Scarico] onSubmitEditing — code:', searchQuery);
-                    lookupItem(searchQuery);
-                  }}
-                />
-              </View>
-              <AnimatedPressable onPress={() => { console.log('[Scarico] scanner button pressed'); setScannerVisible(true); }}>
-                <View style={{
-                  width: 48, height: 48, borderRadius: 12,
-                  backgroundColor: COLORS.primaryMuted, alignItems: 'center', justifyContent: 'center',
-                }}>
-                  {searching
-                    ? <ActivityIndicator size="small" color={COLORS.primary} />
-                    : <Camera size={22} color={COLORS.primary} />
-                  }
-                </View>
-              </AnimatedPressable>
-            </View>
-
-            {searchError ? (
-              <View style={{ backgroundColor: COLORS.dangerMuted, borderRadius: 10, padding: 10, marginBottom: 8 }}>
-                <Text style={{ color: COLORS.danger, fontSize: 13 }}>{searchError}</Text>
-              </View>
-            ) : null}
-
-            <Text style={{
-              fontSize: 13, fontWeight: '600', color: COLORS.textSecondary,
-              textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 8,
-            }}>
-              Articoli scansionati ({scannedItems.length})
-            </Text>
-          </View>
-        }
-        ListFooterComponent={ListFooter}
-        ListEmptyComponent={
-          <View style={{ alignItems: 'center', paddingTop: 40, paddingHorizontal: 32 }}>
-            <View style={{
-              width: 64, height: 64, borderRadius: 18,
-              backgroundColor: COLORS.primaryMuted,
-              alignItems: 'center', justifyContent: 'center', marginBottom: 12,
-            }}>
-              <Camera size={28} color={COLORS.primary} />
-            </View>
-            <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 6, textAlign: 'center' }}>
-              Nessun articolo scansionato
-            </Text>
-            <Text style={{ fontSize: 13, color: COLORS.textSecondary, textAlign: 'center', lineHeight: 18 }}>
-              Scansiona i barcode degli articoli da scaricare
-            </Text>
-          </View>
-        }
-      />
-
-      {/* Bottom action */}
-      <View style={{
-        position: 'absolute', bottom: 0, left: 0, right: 0,
-        backgroundColor: COLORS.surface, padding: 16, paddingBottom: 32,
-        borderTopWidth: 1, borderTopColor: COLORS.border,
-      }}>
+        {/* Confirm button */}
         <AnimatedPressable
           onPress={() => {
-            console.log('[Scarico] Conferma Scarico button pressed — items:', scannedItems.length, 'nuovoLotto:', nuovoLotto?.codice_lotto ?? 'none');
+            console.log('[Scarico] Conferma Scarico button pressed — selectedCount:', selectedCount, 'nuovoLotto:', nuovoLotto?.codice_lotto ?? 'none');
             handleConfermaScario();
           }}
-          style={{ opacity: confirming || scannedItems.length === 0 ? 0.6 : 1 }}
+          style={{ opacity: canConfirm && !confirming ? 1 : 0.5 }}
         >
           <View style={{
-            backgroundColor: scannedItems.length === 0 ? COLORS.textTertiary : COLORS.primary,
-            borderRadius: 14, paddingVertical: 16,
+            backgroundColor: canConfirm ? COLORS.primary : COLORS.textTertiary,
+            borderRadius: 14, paddingVertical: 15,
             alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8,
             shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: scannedItems.length === 0 ? 0 : 0.25, shadowRadius: 8,
-            elevation: scannedItems.length === 0 ? 0 : 4,
+            shadowOpacity: canConfirm ? 0.25 : 0, shadowRadius: 8,
+            elevation: canConfirm ? 4 : 0,
           }}>
             {confirming
               ? <ActivityIndicator color="#fff" size="small" />
               : (
                 <>
-                  <CheckCircle size={18} color="#fff" />
+                  <TrendingDown size={18} color="#fff" />
                   <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>
-                    Conferma Scarico ({scannedItems.length})
+                    {confirmLabel}
                   </Text>
                 </>
               )
@@ -466,15 +556,11 @@ export default function ScaricaScreen() {
         </AnimatedPressable>
       </View>
 
-      {/* Article scanner modal */}
+      {/* Scanner modal */}
       <ScannerModal
         visible={scannerVisible}
-        onClose={() => setScannerVisible(false)}
-        onScanned={(code) => {
-          console.log('[Scarico] barcode scanned from camera:', code);
-          setScannerVisible(false);
-          lookupItem(code);
-        }}
+        onClose={() => { console.log('[Scarico] scanner modal closed'); setScannerVisible(false); }}
+        onScanned={handleBarcodeScan}
         hint="Scansiona il barcode dell'articolo"
       />
 
@@ -527,12 +613,12 @@ export default function ScaricaScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Search input */}
+            {/* Search */}
             <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
               <View style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                backgroundColor: COLORS.surfaceSecondary,
+                backgroundColor: COLORS.surface,
                 borderRadius: 10,
                 borderWidth: 1,
                 borderColor: COLORS.border,
@@ -614,6 +700,14 @@ export default function ScaricaScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Toast */}
+      <ToastMessage
+        message={toast.message}
+        type={toast.type}
+        visible={toast.visible}
+        onHide={hideToast}
+      />
     </View>
   );
 }

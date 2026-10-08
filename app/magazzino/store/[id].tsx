@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { Store, ArrowLeft, Layers, Package } from 'lucide-react-native';
+import { Store, ArrowLeft, Layers, Package, TrendingDown } from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
 import { db } from '@/utils/db';
@@ -215,8 +215,31 @@ export default function DettaglioStoreScreen() {
           )}
         </AnimatedSection>
 
+        {/* Inizia Scarico */}
+        {lottiAttivi.length > 0 && (
+          <AnimatedSection index={2}>
+            <AnimatedPressable
+              onPress={() => {
+                console.log('[DettaglioStore] Inizia Scarico pressed — store_id:', id, 'store_nome:', store.nome);
+                router.push({ pathname: '/magazzino/scarico', params: { store_id: id, store_nome: store?.nome ?? '' } } as any);
+              }}
+            >
+              <View style={{
+                backgroundColor: COLORS.primary, borderRadius: 14, padding: 16,
+                flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+                marginBottom: 20,
+                shadowColor: COLORS.primary, shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.25, shadowRadius: 8, elevation: 4,
+              }}>
+                <TrendingDown size={20} color="#fff" />
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Inizia Scarico</Text>
+              </View>
+            </AnimatedPressable>
+          </AnimatedSection>
+        )}
+
         {/* Movimenti recenti */}
-        <AnimatedSection index={2}>
+        <AnimatedSection index={3}>
           <Text style={{ fontSize: 13, fontWeight: '700', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginTop: 8 }}>
             Movimenti Recenti ({movimentiRecenti.length})
           </Text>
