@@ -143,33 +143,20 @@ export default function RiconciliazioneScreen() {
     setError(null);
     setData(null);
     try {
-      const isoInizio = dataInizio.toISOString().split('T')[0];
-      const isoFine = new Date(dataFine.getTime() + 86400000).toISOString().split('T')[0]; // +1 day inclusive
+      const dateFrom = dataInizio.toISOString().split('T')[0];
+      const dateTo = dataFine.toISOString().split('T')[0];
+      const isoFine = new Date(dataFine.getTime() + 86400000).toISOString().split('T')[0]; // +1 day inclusive for chiusure_cassa
 
-      // Fetch lotti for this store to scope movimenti
-      const { data: lottiStore, error: lottiErr } = await db
-        .from('lotti')
-        .select('id')
-        .eq('store_id', selectedStore.id);
-      if (lottiErr) throw lottiErr;
-      const lottiIds = ((lottiStore ?? []) as { id: string }[]).map(l => l.id);
-
-      // Fetch movimenti for lotti of this store in period
-      let movimentiQuery = db
+      // Fetch movimenti directly by store_id (vendite have store_id but lotto_id=null)
+      const { data: movList, error: movErr } = await db
         .from('movimenti')
-        .select('*, supplier_items!movimenti_articolo_id_fkey(id, item_code, original_data, extra_data)')
-        .gte('created_at', isoInizio)
-        .lt('created_at', isoFine);
-      if (lottiIds.length > 0) {
-        movimentiQuery = movimentiQuery.in('lotto_id', lottiIds);
-      } else {
-        // No lotti for this store — return empty result
-        setData({ caricato_count: 0, caricato_valore: 0, scaricato_count: 0, scaricato_valore: 0, venduto_count: 0, venduto_valore: 0, incassato: 0, ammanchi: [] });
-        setLoading(false);
-        return;
-      }
-      const { data: movimenti, error: movErr } = await movimentiQuery;
+        .select('id, tipo, prezzo, articolo_id, lotto_id, store_id, created_at, supplier_items!movimenti_articolo_id_fkey(id, item_code, original_data, extra_data)')
+        .eq('store_id', selectedStore.id)
+        .in('tipo', ['carico', 'scarico', 'vendita'])
+        .gte('created_at', dateFrom + 'T00:00:00')
+        .lte('created_at', dateTo + 'T23:59:59');
       if (movErr) throw movErr;
+      const movimenti = movList;
 
       // Fetch chiusure_cassa in period (global, filtered by operatore if needed)
       const { data: chiusure, error: chiErr } = await db
@@ -182,24 +169,28 @@ export default function RiconciliazioneScreen() {
 
       type MovimentoRow = {
         tipo: string;
-        // Supabase returns the joined table under the FK column name when using !fk syntax
+        prezzo: number;
         supplier_items: { id: string; item_code: string; original_data: Record<string, string>; extra_data: Record<string, unknown> } | null;
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const movList = ((movimenti ?? []) as any[]).map((m: any) => ({
+      const typedMovimenti = ((movimenti ?? []) as any[]).map((m: any) => ({
         tipo: m.tipo as string,
+        prezzo: Number(m.prezzo) || 0,
         supplier_items: (m.supplier_items ?? null) as MovimentoRow['supplier_items'],
       })) as MovimentoRow[];
 
       const incassato = ((chiusure ?? []) as { incassato_operatore: number }[])
         .reduce((sum, c) => sum + (Number(c.incassato_operatore) || 0), 0);
 
-      const carichi = movList.filter(m => m.tipo === 'carico');
-      const scarichi = movList.filter(m => m.tipo === 'scarico');
-      const vendite = movList.filter(m => m.tipo === 'vendita');
+      const carichi = typedMovimenti.filter(m => m.tipo === 'carico');
+      const scarichi = typedMovimenti.filter(m => m.tipo === 'scarico');
+      const vendite = typedMovimenti.filter(m => m.tipo === 'vendita');
 
-      const sumValore = (items: typeof movList) =>
+      const sumValoreFromExtraData = (items: typeof typedMovimenti) =>
         items.reduce((sum, m) => sum + extractPrezzo(m.supplier_items?.extra_data ?? {}), 0);
+
+      // Venduto: usa m.prezzo direttamente (già salvato nel movimento di vendita)
+      const venduto_valore = vendite.reduce((sum, m) => sum + m.prezzo, 0);
 
       // Ammanchi: articoli caricati non venduti né scaricati
       const vendutoIds = new Set(vendite.map(m => m.supplier_items?.id).filter(Boolean));
@@ -214,15 +205,15 @@ export default function RiconciliazioneScreen() {
           return { id: si.id, item_code: si.item_code, identifier, desc, prezzo: extractPrezzo(si.extra_data) };
         });
 
-      console.log('[Riconciliazione] result — carichi:', carichi.length, 'scarichi:', scarichi.length, 'vendite:', vendite.length, 'ammanchi:', ammanchi.length, 'incassato:', incassato);
+      console.log('[Riconciliazione] result — carichi:', carichi.length, 'scarichi:', scarichi.length, 'vendite:', vendite.length, 'venduto_valore:', venduto_valore, 'ammanchi:', ammanchi.length, 'incassato:', incassato);
 
       setData({
         caricato_count: carichi.length,
-        caricato_valore: sumValore(carichi),
+        caricato_valore: sumValoreFromExtraData(carichi),
         scaricato_count: scarichi.length,
-        scaricato_valore: sumValore(scarichi),
+        scaricato_valore: sumValoreFromExtraData(scarichi),
         venduto_count: vendite.length,
-        venduto_valore: sumValore(vendite),
+        venduto_valore,
         incassato,
         ammanchi,
       });

@@ -26,6 +26,7 @@ interface CartItem {
   identifier: string;
   desc: string;
   prezzo: number;
+  lotto_id: string | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -202,7 +203,7 @@ export default function CassaScreen() {
         return;
       }
 
-      const newItem: CartItem = { id: data.id, item_code: data.item_code, identifier, desc, prezzo };
+      const newItem: CartItem = { id: data.id, item_code: data.item_code, identifier, desc, prezzo, lotto_id: data.lotto_id ?? null };
       console.log('[Cassa] item added to cart:', identifier, 'prezzo:', prezzo);
       setCart(prev => [newItem, ...prev]);
       setSearchQuery('');
@@ -235,6 +236,7 @@ export default function CassaScreen() {
       const movimenti = cart.map(item => ({
         articolo_id: item.id,
         store_id: storeId,
+        lotto_id: item.lotto_id ?? null,
         tipo: 'vendita',
         prezzo: item.prezzo * prezzoUnitarioMoltiplicatore,
       }));
