@@ -329,10 +329,10 @@ export default function CassaScreen() {
       if (error) throw error;
       console.log('[Cassa] Chiusura cassa salvata — calcolato:', totaleGiornaliero, 'totaleOperatore:', totaleOperatore, 'diff:', diff, 'store:', storeId);
       setShowChiusuraModal(false);
-      const diffLabel = diff >= 0 ? `+${formatCurrency(diff)}` : formatCurrency(diff);
+      const diffLabel = diff > 0 ? `-${formatCurrency(diff)}` : `+${formatCurrency(Math.abs(diff))}`;
       Alert.alert(
-        diff === 0 ? 'Chiusura OK ✓' : diff > 0 ? 'Chiusura con eccedenza' : 'Chiusura con ammanco',
-        `Venduto calcolato: ${formatCurrency(totaleGiornaliero)}\nTotale operatore: ${formatCurrency(totaleOperatore)}\nDifferenza: ${diffLabel}`
+        diff === 0 || Math.abs(diff) < 0.01 ? 'Chiusura OK ✓' : diff > 0 ? 'Chiusura con ammanco' : 'Chiusura con eccedenza',
+        `Venduto calcolato: ${formatCurrency(totaleGiornaliero)}\nTotale operatore: ${formatCurrency(totaleOperatore)}\nDifferenza: ${Math.abs(diff) < 0.01 ? '✓ Quadra' : diffLabel}`
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Errore durante la chiusura';
@@ -654,17 +654,22 @@ export default function CassaScreen() {
               const totOp = toNum(incassatoPos) + toNum(incassatoContanti) + toNum(spese) + toNum(scontiCassa) + toNum(buoni) + toNum(restituiti);
               const diff = totaleGiornaliero - totOp;
               const isOk = Math.abs(diff) < 0.01;
-              const isPos = diff > 0.01;
+              const isAmmanco = diff > 0.01;   // venduto > operatore = ammanco
+              const isEccedenza = diff < -0.01; // venduto < operatore = eccedenza
+              const bgColor = isOk ? COLORS.statusCompletedBg : isAmmanco ? COLORS.dangerMuted : COLORS.statusImportedBg;
+              const borderColor = isOk ? COLORS.statusCompleted : isAmmanco ? COLORS.danger : COLORS.statusImported;
+              const diffColor = isOk ? COLORS.statusCompleted : isAmmanco ? COLORS.danger : COLORS.statusImported;
+              const diffLabel = isOk ? '✓ Quadra' : isAmmanco ? `-${formatCurrency(diff)}` : `+${formatCurrency(Math.abs(diff))}`;
               return (
-                <View style={{ backgroundColor: isOk ? COLORS.statusCompletedBg : isPos ? COLORS.statusImportedBg : COLORS.dangerMuted, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: isOk ? COLORS.statusCompleted : isPos ? COLORS.statusImported : COLORS.danger }}>
+                <View style={{ backgroundColor: bgColor, borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: borderColor }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ fontSize: 13, color: COLORS.textSecondary }}>Totale operatore</Text>
                     <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.text }}>{formatCurrency(totOp)}</Text>
                   </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={{ fontSize: 13, color: COLORS.textSecondary }}>Differenza</Text>
-                    <Text style={{ fontSize: 15, fontWeight: '800', color: isOk ? COLORS.statusCompleted : isPos ? COLORS.statusImported : COLORS.danger }}>
-                      {isOk ? '✓ Quadra' : (diff > 0 ? '+' : '') + formatCurrency(diff)}
+                    <Text style={{ fontSize: 15, fontWeight: '800', color: diffColor }}>
+                      {diffLabel}
                     </Text>
                   </View>
                 </View>
