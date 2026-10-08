@@ -144,7 +144,7 @@ export default function CassaScreen() {
       const { data, error } = await db
         .from('supplier_items')
         .select('id, item_code, original_data, extra_data, lotto_id')
-        .or(`item_code.eq.${trimmed},original_data->>LPN.eq.${trimmed},original_data->>PkgID.eq.${trimmed},extra_data->>SKU.eq.${trimmed},extra_data->>PkgID.eq.${trimmed}`)
+        .or(`item_code.eq.${trimmed},original_data->>LPN.eq.${trimmed},extra_data->>SKU.eq.${trimmed}`)
         .limit(1)
         .single();
 
