@@ -44,14 +44,20 @@ interface AmmancoItem {
 
 function extractPrezzo(extraData: Record<string, unknown>): number {
   try {
+    // Prima cerca PrezzoVendita diretto (salvato da Lavorazione)
+    const diretto = extraData?.['PrezzoVendita'];
+    if (diretto !== undefined && diretto !== '') {
+      const n = Number(String(diretto).replace(',', '.'));
+      if (!isNaN(n) && n > 0) return n;
+    }
+    // Fallback: Dati di Vendita nested
     const datoVendita = extraData?.['Dati di Vendita'];
     if (datoVendita && typeof datoVendita === 'object') {
       const dv = datoVendita as Record<string, unknown>;
-      const raw = dv['PREZZO DI VENDITA'] ?? dv['Prezzo di Vendita'] ?? dv['prezzo_di_vendita'] ?? 0;
+      const raw = dv['PREZZO DI VENDITA'] ?? dv['Prezzo di Vendita'] ?? 0;
       return Number(raw) || 0;
     }
-    const raw = extraData?.['PREZZO DI VENDITA'] ?? extraData?.['prezzo_di_vendita'] ?? 0;
-    return Number(raw) || 0;
+    return 0;
   } catch {
     return 0;
   }
@@ -151,7 +157,7 @@ export default function RiconciliazioneScreen() {
       // Fetch movimenti for lotti of this store in period
       let movimentiQuery = db
         .from('movimenti')
-        .select('*, supplier_items!item_id(id, item_code, original_data, extra_data)')
+        .select('*, supplier_items!movimenti_articolo_id_fkey(id, item_code, original_data, extra_data)')
         .gte('created_at', isoInizio)
         .lt('created_at', isoFine);
       if (lottiIds.length > 0) {
