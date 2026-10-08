@@ -164,7 +164,7 @@ export default function DettaglioLottoScreen() {
       const movimenti = articoli.map(a => ({
         lotto_id: lotto.id,
         store_id: selectedStore.id,
-        item_id: a.id,
+        articolo_id: a.id,
         tipo: 'carico',
       }));
       if (movimenti.length > 0) {
