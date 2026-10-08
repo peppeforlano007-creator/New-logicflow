@@ -13,7 +13,7 @@ import {
   Platform,
 } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { Store, ArrowLeft, Layers, Package, TrendingDown, Users, Trash2, X, Plus } from 'lucide-react-native';
+import { Store, ArrowLeft, Layers, Package, TrendingDown, Users, Trash2, X, Plus, ShoppingCart } from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
 import { db } from '@/utils/db';
@@ -47,6 +47,16 @@ interface CassaUtente {
   sconto_percentuale: number;
 }
 
+interface VenditaItem {
+  id: string;
+  articolo_id: string;
+  prezzo: number;
+  created_at: string;
+  identifier: string;
+  desc: string;
+  item_code: string;
+}
+
 function AnimatedSection({ index, children }: { index: number; children: React.ReactNode }) {
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(12)).current;
@@ -70,6 +80,7 @@ export default function DettaglioStoreScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [vendite, setVendite] = useState<VenditaItem[]>([]);
   const [cassaUtenti, setCassaUtenti] = useState<CassaUtente[]>([]);
   const [showAddCassiere, setShowAddCassiere] = useState(false);
   const [utentiDisponibili, setUtentiDisponibili] = useState<{ id: string; username: string }[]>([]);
@@ -84,14 +95,20 @@ export default function DettaglioStoreScreen() {
     if (!id) return;
     console.log('[DettaglioStore] fetchData called for id:', id);
     try {
-      const [storeRes, lottiRes, movRes, cassaRes] = await Promise.all([
+      const [storeRes, lottiRes, movRes, cassaRes, venditaRes] = await Promise.all([
         db.from('stores').select('*').eq('id', id).single(),
         db.from('lotti_con_articoli').select('*').eq('store_id', id).in('stato', ['caricato']),
         db.from('movimenti').select('*').eq('store_id', id).order('created_at', { ascending: false }).limit(20),
         db.from('store_utenti').select('id, user_id, sconto_percentuale, app_users(username)').eq('store_id', id),
+        db.from('movimenti')
+          .select('id, articolo_id, prezzo, created_at, supplier_items!movimenti_articolo_id_fkey(id, item_code, original_data)')
+          .eq('store_id', id)
+          .eq('tipo', 'vendita')
+          .order('created_at', { ascending: false })
+          .limit(50),
       ]);
       if (storeRes.error) throw storeRes.error;
-      console.log('[DettaglioStore] store:', storeRes.data?.nome, '| lotti attivi:', lottiRes.data?.length ?? 0, '| movimenti:', movRes.data?.length ?? 0, '| cassieri:', cassaRes.data?.length ?? 0);
+      console.log('[DettaglioStore] store:', storeRes.data?.nome, '| lotti attivi:', lottiRes.data?.length ?? 0, '| movimenti:', movRes.data?.length ?? 0, '| cassieri:', cassaRes.data?.length ?? 0, '| vendite:', venditaRes.data?.length ?? 0);
       setStore(storeRes.data as StoreItem);
       setLottiAttivi((lottiRes.data as LottoAttivo[]) ?? []);
       setMovimentiRecenti((movRes.data as MovimentoRecente[]) ?? []);
@@ -102,6 +119,24 @@ export default function DettaglioStoreScreen() {
         sconto_percentuale: Number(row.sconto_percentuale),
       }));
       setCassaUtenti(mappedCassa);
+      const mappedVendite: VenditaItem[] = (venditaRes.data ?? []).map((row: any) => {
+        const si = Array.isArray(row.supplier_items) ? row.supplier_items[0] : row.supplier_items;
+        const od = si?.original_data ?? {};
+        const identifier = od['LPN'] ?? od['PkgID'] ?? si?.item_code ?? '—';
+        const descKey = Object.keys(od).find((k: string) => k.toLowerCase() === 'itemdesc');
+        const desc = descKey ? (od[descKey] || '—') : '—';
+        return {
+          id: row.id,
+          articolo_id: row.articolo_id,
+          prezzo: Number(row.prezzo) || 0,
+          created_at: row.created_at,
+          identifier,
+          desc,
+          item_code: si?.item_code ?? '—',
+        };
+      });
+      console.log('[DettaglioStore] vendite mappate:', mappedVendite.length);
+      setVendite(mappedVendite);
     } catch (err) {
       console.error('[DettaglioStore] fetchData exception:', err);
     } finally {
@@ -387,8 +422,45 @@ export default function DettaglioStoreScreen() {
           </AnimatedSection>
         )}
 
-        {/* Movimenti recenti */}
+        {/* Articoli Venduti */}
         <AnimatedSection index={isAdminOrManager ? 4 : 3}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginTop: 8 }}>
+            Articoli Venduti ({vendite.length})
+          </Text>
+          {vendite.length === 0 ? (
+            <View style={{ backgroundColor: COLORS.surface, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: COLORS.border, marginBottom: 20 }}>
+              <Text style={{ color: COLORS.textSecondary, fontSize: 14, textAlign: 'center' }}>Nessuna vendita registrata</Text>
+            </View>
+          ) : (
+            vendite.map(v => {
+              const prezzoLabel = v.prezzo.toFixed(2);
+              const dateLabel = formatDate(v.created_at);
+              return (
+                <View key={v.id} style={{
+                  backgroundColor: COLORS.surface, borderRadius: 12, padding: 14, marginBottom: 8,
+                  borderWidth: 1, borderColor: COLORS.border, flexDirection: 'row', alignItems: 'center', gap: 10,
+                }}>
+                  <View style={{ width: 36, height: 36, borderRadius: 9, backgroundColor: COLORS.statusProcessingBg, alignItems: 'center', justifyContent: 'center' }}>
+                    <ShoppingCart size={18} color={COLORS.statusProcessing} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>{v.identifier}</Text>
+                    <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>{v.desc}</Text>
+                    <Text style={{ fontSize: 11, color: COLORS.textTertiary, marginTop: 2 }}>{dateLabel}</Text>
+                  </View>
+                  <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.statusProcessing }}>
+                    €
+                    {' '}
+                    {prezzoLabel}
+                  </Text>
+                </View>
+              );
+            })
+          )}
+        </AnimatedSection>
+
+        {/* Movimenti recenti */}
+        <AnimatedSection index={isAdminOrManager ? 5 : 4}>
           <Text style={{ fontSize: 13, fontWeight: '700', color: COLORS.textSecondary, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10, marginTop: 8 }}>
             Movimenti Recenti ({movimentiRecenti.length})
           </Text>

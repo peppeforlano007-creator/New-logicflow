@@ -225,9 +225,9 @@ export default function CassaScreen() {
       await db.from('supplier_items').update({ status: 'completed' }).in('id', ids);
 
       console.log('[Cassa] Vendita completata — items:', cart.length, 'totale scontato:', totaleCarrello);
-      Alert.alert('Vendita completata', `${cart.length} articoli venduti per ${formatCurrency(totaleCarrello)}`, [
-        { text: 'OK', onPress: () => setCart([]) },
-      ]);
+      setCart([]);
+      setSearchQuery('');
+      Alert.alert('Vendita completata', `${cart.length} articoli venduti per ${formatCurrency(totaleCarrello)}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Errore durante la vendita';
       console.error('[Cassa] conferma vendita error:', msg);
