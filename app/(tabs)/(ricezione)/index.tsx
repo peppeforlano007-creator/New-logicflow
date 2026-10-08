@@ -96,7 +96,6 @@ export default function RicezioneScreen() {
   const [bannerType, setBannerType] = useState<'error' | 'warning'>('error');
   const [selectedColumn, setSelectedColumn] = useState<'PkgID' | 'LPN'>('PkgID');
   const errorBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bannerOpacity = useRef(new Animated.Value(0)).current;
   const inputRef = useRef<TextInput>(null);
 
@@ -380,29 +379,23 @@ export default function RicezioneScreen() {
   );
 
   const handleManualCodeChange = useCallback((text: string) => {
-    setManualCode(text);
-    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-    if (text.trim().length > 0) {
-      debounceTimerRef.current = setTimeout(() => {
-        const finalCode = text.trim();
-        if (finalCode) {
-          console.log('[Ricezione] Debounce fired, processing code:', finalCode);
-          processCode(finalCode);
-          setManualCode('');
-          setTimeout(() => inputRef.current?.focus(), 50);
-        }
-      }, 600);
+    // Il lettore barcode invia spesso un newline finale — processa subito
+    if (text.endsWith('\n') || text.endsWith('\r')) {
+      const finalCode = text.replace(/[\r\n]/g, '').trim();
+      if (finalCode) {
+        console.log('[Ricezione] Barcode reader newline detected, processing code:', finalCode);
+        processCode(finalCode);
+        setManualCode('');
+        setTimeout(() => inputRef.current?.focus(), 50);
+      }
+      return;
     }
+    setManualCode(text);
   }, [processCode]);
 
   const handleManualSearch = useCallback(() => {
     console.log('[Ricezione] handleManualSearch pressed, code:', manualCode);
     if (!manualCode.trim()) return;
-    // Cancel any pending debounce to avoid double-processing
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
     processCode(manualCode.trim());
     setManualCode('');
     setTimeout(() => inputRef.current?.focus(), 50);
