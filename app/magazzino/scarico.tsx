@@ -371,6 +371,31 @@ export default function ScaricaScreen() {
       if (siErr) throw siErr;
 
       console.log('[Scarico] scarico completato — items:', selectedIds.length, 'lotto:', nuovoLotto.codice_lotto);
+
+      // ── Riporta i lotti di origine a "magazzino" se rimasti vuoti ──────────
+      const originLottoIds = [...new Set(
+        selectedIds
+          .map(id => storeArticoli.find(a => a.id === id)?.lotto_id)
+          .filter((lid): lid is string => !!lid)
+      )];
+      console.log('[Scarico] lotti di origine da verificare:', originLottoIds);
+
+      for (const lottoId of originLottoIds) {
+        const { count } = await db
+          .from('supplier_items')
+          .select('id', { count: 'exact', head: true })
+          .eq('lotto_id', lottoId)
+          .gt('quantita_disponibile', 0);
+
+        if ((count ?? 0) === 0) {
+          await db
+            .from('lotti')
+            .update({ stato: 'magazzino', store_id: null })
+            .eq('id', lottoId);
+          console.log('[Scarico] Lotto', lottoId, 'tornato a magazzino (vuoto dopo scarico)');
+        }
+      }
+
       router.back();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Errore durante lo scarico';
