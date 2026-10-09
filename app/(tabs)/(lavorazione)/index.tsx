@@ -246,7 +246,7 @@ export default function LavorazioneScreen() {
               </Text>
               <View style={{ marginTop: 6, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                 <ItemStatusBadge status={itemStatus} size="sm" />
-                {showQtyBadge && totalLav > 1 ? (
+                {(totalLav > 1 || (typeof eanReceived === 'number' && eanReceived > 0)) ? (
                   <View style={{
                     backgroundColor: processedUnitsCount === totalLav ? '#D1FAE5' : '#DBEAFE',
                     borderRadius: 6,
