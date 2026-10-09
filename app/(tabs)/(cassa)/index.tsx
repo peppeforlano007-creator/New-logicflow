@@ -309,28 +309,35 @@ export default function CassaScreen() {
         data = primaryData[0];
         console.log('[Cassa] primary lookup found — id:', data.id);
       } else {
-        // Fallback: search units[].SKU client-side within this store's lotti
+        // Fallback: search units[].SKU — look across ALL multi-unit items, filter by unit's LottoId
         console.log('[Cassa] primary lookup empty, trying unit SKU fallback for:', trimmed);
-        const { data: lottiData } = await db
+        const { data: storeLottiData } = await db
           .from('lotti')
           .select('id')
           .eq('store_id', storeId)
           .eq('stato', 'caricato');
-        const lottiIds = (lottiData ?? []).map((l: any) => l.id);
-        if (lottiIds.length > 0) {
-          const { data: allItems } = await db
-            .from('supplier_items')
-            .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
-            .in('lotto_id', lottiIds);
-          const found = (allItems ?? []).find((item: any) => {
-            const units: any[] = Array.isArray(item.extra_data?.units) ? item.extra_data.units : [];
-            return units.some((u: any) => u?.SKU === trimmed);
-          });
-          if (found) {
-            data = found;
-            matchedUnitIndex = (found.extra_data?.units ?? []).findIndex((u: any) => u?.SKU === trimmed);
-            console.log('[Cassa] unit SKU fallback found — id:', data.id, 'unitIndex:', matchedUnitIndex);
+        const storeLottiIds = new Set((storeLottiData ?? []).map((l: any) => l.id));
+
+        const { data: allMultiItems } = await db
+          .from('supplier_items')
+          .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
+          .gt('quantita', 1);
+
+        let foundItem: any = null;
+        let foundUnitIndex = -1;
+        for (const item of (allMultiItems ?? [])) {
+          const units: any[] = Array.isArray(item.extra_data?.units) ? item.extra_data.units : [];
+          const idx = units.findIndex((u: any) => u?.SKU === trimmed && u?.LottoId && storeLottiIds.has(u.LottoId));
+          if (idx !== -1) {
+            foundItem = item;
+            foundUnitIndex = idx;
+            break;
           }
+        }
+        if (foundItem) {
+          data = foundItem;
+          matchedUnitIndex = foundUnitIndex;
+          console.log('[Cassa] unit SKU fallback found — id:', data.id, 'unitIndex:', matchedUnitIndex);
         }
       }
 
@@ -343,6 +350,27 @@ export default function CassaScreen() {
             matchedUnitIndex = unitIdx;
             console.log('[Cassa] matched unit SKU in primary result — unitIndex:', matchedUnitIndex);
           }
+        }
+      }
+
+      // If a specific unit was matched by SKU, verify that unit's lotto belongs to this store
+      if (matchedUnitIndex !== null) {
+        const units: any[] = Array.isArray(data.extra_data?.units) ? data.extra_data.units : [];
+        const matchedUnit = units[matchedUnitIndex];
+        if (matchedUnit?.LottoId) {
+          const { data: storeLotti } = await db
+            .from('lotti')
+            .select('id')
+            .eq('store_id', storeId)
+            .eq('stato', 'caricato');
+          const storeLottiIds = new Set((storeLotti ?? []).map((l: any) => l.id));
+          if (!storeLottiIds.has(matchedUnit.LottoId)) {
+            console.log('[Cassa] unit SKU belongs to a different store — LottoId:', matchedUnit.LottoId, 'storeId:', storeId);
+            setSearchError(`Articolo non disponibile in questo store`);
+            setSearching(false);
+            return;
+          }
+          console.log('[Cassa] unit SKU verified in store — LottoId:', matchedUnit.LottoId);
         }
       }
 
