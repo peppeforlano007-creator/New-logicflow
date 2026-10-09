@@ -30,6 +30,7 @@ interface SfogliaItem {
   lotto_id: string | null;
   lotto_codice: string;
   quantita_disponibile: number;
+  sku: string;
 }
 
 interface CartItem {
@@ -42,6 +43,7 @@ interface CartItem {
   quantita: number;
   quantita_disponibile: number;
   status: string;
+  unitIndex?: number | null;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -203,7 +205,8 @@ export default function CassaScreen() {
           const prezzo = extractPrezzo(item.extra_data ?? {});
           const lotto_codice = item.lotto_id ? (lottiMap[item.lotto_id] ?? '—') : '—';
           const qtaDisp = item.quantita_disponibile ?? 1;
-          return { id: item.id, item_code: item.item_code, identifier, desc, prezzo, lotto_id: item.lotto_id, lotto_codice, quantita_disponibile: qtaDisp };
+          const sku = String((item.extra_data ?? {})['SKU'] ?? '').trim();
+          return { id: item.id, item_code: item.item_code, identifier, desc, prezzo, lotto_id: item.lotto_id, lotto_codice, quantita_disponibile: qtaDisp, sku };
         });
 
       console.log('[Cassa] sfoglia loaded — items disponibili:', result.length);
@@ -249,21 +252,65 @@ export default function CassaScreen() {
     setSearching(true);
     setSearchError(null);
     try {
-      const { data, error } = await db
+      // Primary query: item_code, LPN, ASIN, PkgID, top-level extra_data.SKU
+      const { data: primaryData, error: primaryError } = await db
         .from('supplier_items')
         .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
         .or(`item_code.eq.${trimmed},original_data->>LPN.eq.${trimmed},original_data->>ASIN.eq.${trimmed},original_data->>PkgID.eq.${trimmed},extra_data->>SKU.eq.${trimmed}`)
-        .limit(1)
-        .single();
+        .limit(5);
 
-      if (error || !data) {
+      let data: any = null;
+      let matchedUnitIndex: number | null = null;
+
+      if (!primaryError && primaryData && primaryData.length > 0) {
+        data = primaryData[0];
+        console.log('[Cassa] primary lookup found — id:', data.id);
+      } else {
+        // Fallback: search units[].SKU client-side within this store's lotti
+        console.log('[Cassa] primary lookup empty, trying unit SKU fallback for:', trimmed);
+        const { data: lottiData } = await db
+          .from('lotti')
+          .select('id')
+          .eq('store_id', storeId)
+          .eq('stato', 'caricato');
+        const lottiIds = (lottiData ?? []).map((l: any) => l.id);
+        if (lottiIds.length > 0) {
+          const { data: allItems } = await db
+            .from('supplier_items')
+            .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
+            .in('lotto_id', lottiIds);
+          const found = (allItems ?? []).find((item: any) => {
+            const units: any[] = Array.isArray(item.extra_data?.units) ? item.extra_data.units : [];
+            return units.some((u: any) => u?.SKU === trimmed);
+          });
+          if (found) {
+            data = found;
+            matchedUnitIndex = (found.extra_data?.units ?? []).findIndex((u: any) => u?.SKU === trimmed);
+            console.log('[Cassa] unit SKU fallback found — id:', data.id, 'unitIndex:', matchedUnitIndex);
+          }
+        }
+      }
+
+      // Also check primary results for unit SKU match (in case primary found the item but via another field)
+      if (data && matchedUnitIndex === null) {
+        const units: any[] = Array.isArray(data.extra_data?.units) ? data.extra_data.units : [];
+        if (units.length > 0) {
+          const unitIdx = units.findIndex((u: any) => u?.SKU === trimmed);
+          if (unitIdx !== -1) {
+            matchedUnitIndex = unitIdx;
+            console.log('[Cassa] matched unit SKU in primary result — unitIndex:', matchedUnitIndex);
+          }
+        }
+      }
+
+      if (!data) {
         console.log('[Cassa] item not found for code:', trimmed);
         setSearchError(`Articolo non trovato: ${trimmed}`);
         return;
       }
 
       const qtaDisp = (data as any).quantita_disponibile ?? 1;
-      console.log('[Cassa] item found — id:', data.id, 'quantita_disponibile:', qtaDisp);
+      console.log('[Cassa] item found — id:', data.id, 'quantita_disponibile:', qtaDisp, 'matchedUnitIndex:', matchedUnitIndex);
 
       // Verifica disponibilità tramite quantita_disponibile
       if (qtaDisp <= 0) {
@@ -308,7 +355,12 @@ export default function CassaScreen() {
       const origData = data.original_data ?? {};
       const legacyDescKey = Object.keys(origData).find((k: string) => k.toLowerCase() === 'itemdesc');
       const desc = origData['Title'] ?? origData['title'] ?? origData['descrizione'] ?? origData['Descrizione'] ?? (legacyDescKey ? (origData[legacyDescKey] || '—') : '—');
-      const prezzo = extractPrezzo(data.extra_data ?? {});
+
+      // Use unit-specific price if matched by unit SKU
+      const units: any[] = Array.isArray(data.extra_data?.units) ? data.extra_data.units : [];
+      const prezzo = matchedUnitIndex !== null && units[matchedUnitIndex]?.PrezzoVendita
+        ? Number(String(units[matchedUnitIndex].PrezzoVendita).replace(',', '.')) || 0
+        : extractPrezzo(data.extra_data ?? {});
 
       if (cart.some(i => i.id === data.id)) {
         console.log('[Cassa] item already in cart:', identifier);
@@ -326,8 +378,9 @@ export default function CassaScreen() {
         quantita: 1,
         quantita_disponibile: qtaDisp,
         status: (data as any).status ?? 'processing',
+        unitIndex: matchedUnitIndex,
       };
-      console.log('[Cassa] item added to cart:', identifier, 'prezzo:', prezzo, 'qtaDisp:', qtaDisp);
+      console.log('[Cassa] item added to cart:', identifier, 'prezzo:', prezzo, 'qtaDisp:', qtaDisp, 'unitIndex:', matchedUnitIndex);
       setCart(prev => [newItem, ...prev]);
       setSearchQuery('');
     } catch (err) {
@@ -553,6 +606,14 @@ export default function CassaScreen() {
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={{ fontSize: 14, fontWeight: '600', color: COLORS.text }} numberOfLines={1}>{item.identifier}</Text>
             <Text style={{ fontSize: 12, color: COLORS.textSecondary }} numberOfLines={1}>{item.desc}</Text>
+            {item.unitIndex != null && (
+              <View style={{ alignSelf: 'flex-start', backgroundColor: '#DBEAFE', borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, marginTop: 3 }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#1E40AF' }}>
+                  {'Unità '}
+                  {item.unitIndex + 1}
+                </Text>
+              </View>
+            )}
           </View>
           <View style={{ alignItems: 'flex-end', marginRight: 4 }}>
             {hasSconto ? (
@@ -857,7 +918,7 @@ export default function CassaScreen() {
               data={sfogliaItems.filter(item => {
                 if (!sfogliaFilter.trim()) return true;
                 const q = sfogliaFilter.toLowerCase();
-                return item.desc.toLowerCase().includes(q) || item.identifier.toLowerCase().includes(q) || item.item_code.toLowerCase().includes(q) || item.lotto_codice.toLowerCase().includes(q);
+                return item.desc.toLowerCase().includes(q) || item.identifier.toLowerCase().includes(q) || item.item_code.toLowerCase().includes(q) || item.lotto_codice.toLowerCase().includes(q) || (item.sku && item.sku.toLowerCase().includes(q));
               })}
               keyExtractor={item => item.id}
               contentContainerStyle={{ padding: 16, paddingBottom: 40 }}

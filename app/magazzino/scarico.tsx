@@ -34,6 +34,7 @@ interface StoreArticolo {
   desc: string;
   codice_lotto: string;
   lotto_id: string;
+  skus: string[];
 }
 
 type Lotto = {
@@ -144,6 +145,20 @@ export default function ScaricaScreen() {
           a.item_code;
         const descKey = Object.keys(od).find(k => k.toLowerCase() === 'itemdesc');
         const desc = descKey ? String(od[descKey] ?? '—') : '—';
+
+        // Extract all SKUs (top-level + per-unit)
+        const ed = a.extra_data ?? {};
+        const skus: string[] = [];
+        const topSku = ed['SKU'];
+        if (topSku && String(topSku).trim()) skus.push(String(topSku).trim());
+        const units: any[] = Array.isArray(ed['units']) ? ed['units'] : [];
+        for (const u of units) {
+          const uSku = u?.SKU;
+          if (uSku && String(uSku).trim() && !skus.includes(String(uSku).trim())) {
+            skus.push(String(uSku).trim());
+          }
+        }
+
         return {
           id: a.id,
           item_code: a.item_code,
@@ -151,6 +166,7 @@ export default function ScaricaScreen() {
           desc,
           codice_lotto: lottoMap[a.lotto_id] ?? '—',
           lotto_id: a.lotto_id,
+          skus,
         };
       });
 
@@ -195,7 +211,8 @@ export default function ScaricaScreen() {
     : storeArticoli.filter(a =>
         a.identifier.toLowerCase().includes(queryLower) ||
         a.item_code.toLowerCase().includes(queryLower) ||
-        a.desc.toLowerCase().includes(queryLower)
+        a.desc.toLowerCase().includes(queryLower) ||
+        a.skus.some(s => s.toLowerCase().includes(queryLower))
       );
 
   // ── Selection helpers ────────────────────────────────────────────────────────
@@ -247,7 +264,8 @@ export default function ScaricaScreen() {
     const trimmed = code.trim();
     const found = storeArticoli.find(a =>
       a.item_code === trimmed ||
-      (a.identifier === trimmed)
+      a.identifier === trimmed ||
+      a.skus.some(s => s === trimmed)
     );
     if (found) {
       console.log('[Scarico] barcode match found:', found.identifier);

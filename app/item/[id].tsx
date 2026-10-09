@@ -459,6 +459,14 @@ export default function ItemDetailScreen() {
       };
 
       if (totalUnits > 1) {
+        // SKU is mandatory for multi-unit articles
+        if (skuVendita.trim() === '') {
+          console.log('[ItemDetail] handleSave blocked — SKU obbligatorio per multi-unità');
+          showToast('SKU obbligatorio per articoli multi-quantità', 'error');
+          setSaving(false);
+          return;
+        }
+
         // Multi-unit flow
         const unitData: UnitData = {
           unitIndex: currentUnitIndex,
