@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,7 +8,14 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { ScanLine, CheckCircle2, CheckCircle, AlertCircle, ChevronRight } from 'lucide-react-native';
+import {
+  ScanLine,
+  CheckCircle2,
+  CheckCircle,
+  Package,
+  Tag,
+  Barcode,
+} from 'lucide-react-native';
 import { COLORS } from '@/constants/AppColors';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
 import { ToastMessage, useToast } from '@/components/ToastMessage';
@@ -16,7 +23,9 @@ import { ScannerModal } from '@/components/ScannerModal';
 import { db } from '@/utils/db';
 import type { SupplierFile, SupplierItem } from '@/types';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type ScanMode = 'pkgid' | 'lpn' | 'ean';
 
 interface PkgGroup {
   pkgId: string;
@@ -24,25 +33,29 @@ interface PkgGroup {
   isReceived: boolean;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+interface LpnRow {
+  lpnValue: string;
+  item: SupplierItem;
+  isReceived: boolean;
+}
 
-function detectPkgColumn(items: SupplierItem[]): string | null {
+interface EanRow {
+  eanValue: string;
+  item: SupplierItem;
+  receivedQty: number;
+  totalQty: number;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function detectEanColumn(items: SupplierItem[]): string | null {
   if (items.length === 0) return null;
   const keys = Object.keys(items[0].original_data ?? {});
-  // Priority 1: exact pkgid
-  const exact = keys.find(k => k.toLowerCase() === 'pkgid');
-  if (exact) return exact;
-  // Priority 2: contains pkg
-  const pkg = keys.find(k => k.toLowerCase().includes('pkg'));
-  if (pkg) return pkg;
-  // Priority 3: contains barcode/codice/code/id
-  const fallback = keys.find(k =>
-    k.toLowerCase().includes('barcode') ||
-    k.toLowerCase().includes('codice') ||
-    k.toLowerCase().includes('code') ||
-    k.toLowerCase().includes('id')
+  return (
+    keys.find(k => k.toLowerCase().includes('ean')) ??
+    keys.find(k => k.toLowerCase().includes('barcode')) ??
+    null
   );
-  return fallback ?? null;
 }
 
 function groupByPkgId(items: SupplierItem[], column: string): PkgGroup[] {
@@ -59,7 +72,6 @@ function groupByPkgId(items: SupplierItem[], column: string): PkgGroup[] {
     const isReceived = groupItems.every(i => i.extra_data?.received === 'true');
     groups.push({ pkgId, items: groupItems, isReceived });
   });
-  // Sort: not received first, then received
   groups.sort((a, b) => {
     if (a.isReceived === b.isReceived) return a.pkgId.localeCompare(b.pkgId);
     return a.isReceived ? 1 : -1;
@@ -67,7 +79,7 @@ function groupByPkgId(items: SupplierItem[], column: string): PkgGroup[] {
   return groups;
 }
 
-// ─── PkgGroup Card ────────────────────────────────────────────────────────────
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
 function PkgGroupCard({ group }: { group: PkgGroup }) {
   const itemCount = group.items.length;
@@ -113,34 +125,160 @@ function PkgGroupCard({ group }: { group: PkgGroup }) {
   );
 }
 
-// ─── Column Picker ────────────────────────────────────────────────────────────
+function LpnRowCard({ row }: { row: LpnRow }) {
+  const itemCode = row.item.item_code ?? '';
 
-function ColumnPicker({
-  columns,
-  onSelect,
-}: {
-  columns: string[];
-  onSelect: (col: string) => void;
-}) {
+  if (row.isReceived) {
+    return (
+      <View style={styles.groupCardReceived}>
+        <View style={styles.groupCardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.groupPkgIdReceived}>{row.lpnValue}</Text>
+            {itemCode ? <Text style={styles.groupCountReceived}>{itemCode}</Text> : null}
+          </View>
+          <CheckCircle2 size={24} color="#16A34A" />
+        </View>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.columnPickerCard}>
-      <Text style={styles.columnPickerTitle}>
-        Seleziona la colonna da usare come identificatore barcode
-      </Text>
-      {columns.map(col => (
-        <TouchableOpacity
-          key={col}
-          style={styles.columnPickerRow}
-          onPress={() => {
-            console.log('[Reception] Column selected:', col);
-            onSelect(col);
-          }}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.columnPickerRowText}>{col}</Text>
-          <ChevronRight size={18} color={COLORS.textSecondary} />
-        </TouchableOpacity>
-      ))}
+    <View style={styles.groupCard}>
+      <View style={styles.groupCardHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.groupPkgId}>{row.lpnValue}</Text>
+          {itemCode ? <Text style={styles.groupCount}>{itemCode}</Text> : null}
+        </View>
+        <View style={styles.groupBadgePending}>
+          <Text style={styles.groupBadgePendingText}>Da scansionare</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function EanRowCard({ row }: { row: EanRow }) {
+  const isComplete = row.receivedQty >= row.totalQty;
+  const isPartial = row.receivedQty > 0 && !isComplete;
+  const qtyLabel = `${row.receivedQty}/${row.totalQty}`;
+  const itemCode = row.item.item_code ?? '';
+
+  if (isComplete) {
+    return (
+      <View style={styles.groupCardReceived}>
+        <View style={styles.groupCardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.groupPkgIdReceived}>{row.eanValue}</Text>
+            {itemCode ? <Text style={styles.groupCountReceived}>{itemCode}</Text> : null}
+          </View>
+          <View style={styles.eanQtyBadgeGreen}>
+            <Text style={styles.eanQtyBadgeGreenText}>{qtyLabel}</Text>
+          </View>
+          <CheckCircle2 size={22} color="#16A34A" />
+        </View>
+      </View>
+    );
+  }
+
+  if (isPartial) {
+    return (
+      <View style={styles.eanCardPartial}>
+        <View style={styles.groupCardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.eanPkgIdPartial}>{row.eanValue}</Text>
+            {itemCode ? <Text style={styles.eanCountPartial}>{itemCode}</Text> : null}
+          </View>
+          <View style={styles.eanQtyBadgeYellow}>
+            <Text style={styles.eanQtyBadgeYellowText}>{qtyLabel}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.groupCard}>
+      <View style={styles.groupCardHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.groupPkgId}>{row.eanValue}</Text>
+          {itemCode ? <Text style={styles.groupCount}>{itemCode}</Text> : null}
+        </View>
+        <View style={styles.groupBadgePending}>
+          <Text style={styles.groupBadgePendingText}>{qtyLabel}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ─── Mode Selector ────────────────────────────────────────────────────────────
+
+interface ModeSelectorProps {
+  currentMode: ScanMode | null;
+  pkgidAvailable: boolean;
+  lpnAvailable: boolean;
+  eanAvailable: boolean;
+  onSelect: (mode: ScanMode) => void;
+}
+
+function ModeSelector({ currentMode, pkgidAvailable, lpnAvailable, eanAvailable, onSelect }: ModeSelectorProps) {
+  const modes: { mode: ScanMode; label: string; subtitle: string; icon: React.ReactNode; available: boolean }[] = [
+    {
+      mode: 'pkgid',
+      label: 'PkgID',
+      subtitle: 'Scansiona collo, riceve tutti gli articoli',
+      icon: <Package size={20} color={currentMode === 'pkgid' ? '#1A56DB' : COLORS.textSecondary} />,
+      available: pkgidAvailable,
+    },
+    {
+      mode: 'lpn',
+      label: 'LPN',
+      subtitle: 'Scansiona unità fisica singola',
+      icon: <Tag size={20} color={currentMode === 'lpn' ? '#7C3AED' : COLORS.textSecondary} />,
+      available: lpnAvailable,
+    },
+    {
+      mode: 'ean',
+      label: 'EAN',
+      subtitle: 'Scansiona codice articolo, conta unità',
+      icon: <Barcode size={20} color={currentMode === 'ean' ? COLORS.primary : COLORS.textSecondary} />,
+      available: eanAvailable,
+    },
+  ];
+
+  return (
+    <View style={styles.modeSelectorCard}>
+      <Text style={styles.modeSelectorTitle}>Modalità di scansione</Text>
+      <View style={styles.modeSelectorRow}>
+        {modes.map(({ mode, label, subtitle, icon, available }) => {
+          const isActive = currentMode === mode;
+          const activeColor = mode === 'pkgid' ? '#1A56DB' : mode === 'lpn' ? '#7C3AED' : COLORS.primary;
+          return (
+            <TouchableOpacity
+              key={mode}
+              style={[
+                styles.modeCard,
+                isActive && { borderColor: activeColor, borderWidth: 2, backgroundColor: `${activeColor}10` },
+                !available && styles.modeCardDisabled,
+              ]}
+              onPress={() => {
+                console.log('[Reception] Mode selected:', mode);
+                if (available) onSelect(mode);
+              }}
+              activeOpacity={available ? 0.7 : 1}
+              disabled={!available}
+            >
+              {icon}
+              <Text style={[styles.modeCardLabel, isActive && { color: activeColor }, !available && styles.modeCardLabelDisabled]}>
+                {label}
+              </Text>
+              <Text style={[styles.modeCardSubtitle, !available && styles.modeCardLabelDisabled]} numberOfLines={2}>
+                {available ? subtitle : 'Non configurato'}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
     </View>
   );
 }
@@ -157,7 +295,9 @@ export default function ReceptionScreen() {
   const [markingComplete, setMarkingComplete] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [processingCode, setProcessingCode] = useState(false);
-  const [selectedColumn, setSelectedColumn] = useState<string | null>(null);
+  const [scanMode, setScanMode] = useState<ScanMode | null>(null);
+  // EAN local counters: eanValue → count scanned this session
+  const [eanCounts, setEanCounts] = useState<Record<string, number>>({});
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
 
@@ -178,14 +318,42 @@ export default function ReceptionScreen() {
         throw itemsRes.error;
       }
 
+      const fetchedFile = fileRes.data as SupplierFile;
       const fetchedItems = (itemsRes.data ?? []) as SupplierItem[];
       console.log('[Reception] fetchData success, items:', fetchedItems.length);
-      setFile(fileRes.data as SupplierFile);
+      setFile(fetchedFile);
       setItems(fetchedItems);
 
-      const detected = detectPkgColumn(fetchedItems);
-      console.log('[Reception] Auto-detected column:', detected);
-      setSelectedColumn(detected);
+      // Auto-detect scan mode
+      let detectedMode: ScanMode | null = null;
+      if (fetchedFile.pkgid_column) {
+        detectedMode = 'pkgid';
+      } else if (fetchedFile.lpn_column) {
+        detectedMode = 'lpn';
+      } else {
+        const eanCol = detectEanColumn(fetchedItems);
+        if (eanCol) detectedMode = 'ean';
+      }
+      console.log('[Reception] Auto-detected scan mode:', detectedMode);
+      setScanMode(detectedMode);
+
+      // Restore EAN counts from DB extra_data
+      if (detectedMode === 'ean' || !detectedMode) {
+        const eanCol = fetchedFile.asin_column?.toLowerCase().includes('ean')
+          ? fetchedFile.asin_column
+          : detectEanColumn(fetchedItems);
+        if (eanCol) {
+          const restored: Record<string, number> = {};
+          for (const item of fetchedItems) {
+            const eanVal = String(item.original_data?.[eanCol] ?? '').trim();
+            if (!eanVal) continue;
+            const storedQty = Number(item.extra_data?.ean_received_qty ?? 0);
+            if (storedQty > 0) restored[eanVal] = storedQty;
+          }
+          console.log('[Reception] Restored EAN counts from DB:', Object.keys(restored).length, 'entries');
+          setEanCounts(restored);
+        }
+      }
     } catch (err) {
       console.error('[Reception] fetchData exception:', err);
     } finally {
@@ -197,97 +365,238 @@ export default function ReceptionScreen() {
     fetchData();
   }, [fetchData]);
 
-  // ── Barcode handler ────────────────────────────────────────────────────────
+  // ── Derived column values ──────────────────────────────────────────────────
 
-  const handleScanned = useCallback(
-    async (code: string) => {
-      if (processingCode) return;
-      if (!selectedColumn) return;
-      setProcessingCode(true);
-      console.log('[Reception] handleScanned start', { code, fileId, column: selectedColumn });
+  const eanColumn = useMemo(() => {
+    if (!file) return null;
+    if (file.asin_column?.toLowerCase().includes('ean')) return file.asin_column;
+    return detectEanColumn(items);
+  }, [file, items]);
 
-      try {
-        const normalizedCode = code.trim().toLowerCase();
-        const matched = items.filter(item => {
-          const val = item.original_data?.[selectedColumn] ?? '';
-          return String(val).trim().toLowerCase() === normalizedCode;
-        });
+  const pkgidAvailable = Boolean(file?.pkgid_column);
+  const lpnAvailable = Boolean(file?.lpn_column);
+  const eanAvailable = Boolean(eanColumn);
 
-        if (matched.length === 0) {
-          console.log('[Reception] No items found for code:', code);
-          showToast(`Nessun articolo trovato per ${selectedColumn}: ${code}`, 'error');
-          setProcessingCode(false);
-          return;
-        }
+  // ── Handle mode change ─────────────────────────────────────────────────────
 
-        // Check if already received
-        const alreadyReceived = matched.every(item => item.extra_data?.received === 'true');
-        if (alreadyReceived) {
-          console.log('[Reception] Duplicate scan blocked for code:', code);
-          showToast(`Codice già scansionato e già in fase di lavorazione`, 'error');
-          setProcessingCode(false);
-          return;
-        }
+  const handleModeChange = useCallback((mode: ScanMode) => {
+    console.log('[Reception] Changing scan mode to:', mode, '(resetting EAN counts)');
+    setScanMode(mode);
+    setEanCounts({});
+  }, []);
 
-        console.log('[Reception] Found', matched.length, 'items for', selectedColumn, ':', code);
+  // ── PkgID scan handler ─────────────────────────────────────────────────────
 
-        // Ensure extra_columns has received / received_at
-        const currentExtraColumns: string[] = file?.extra_columns ?? [];
-        const newColumns = ['received', 'received_at'].filter(c => !currentExtraColumns.includes(c));
-        if (newColumns.length > 0) {
-          console.log('[Reception] Adding extra_columns:', newColumns);
-          const { error: colErr } = await db
-            .from('supplier_files')
-            .update({ extra_columns: [...currentExtraColumns, ...newColumns] })
-            .eq('id', fileId);
-          if (colErr) console.error('[Reception] extra_columns update error:', colErr);
-          else {
-            setFile(prev => prev ? { ...prev, extra_columns: [...currentExtraColumns, ...newColumns] } : prev);
-          }
-        }
+  const handlePkgIdScan = useCallback(async (code: string) => {
+    const column = file?.pkgid_column;
+    if (!column) return;
+    console.log('[Reception][PkgID] handlePkgIdScan', { code, column });
 
-        // Update each matched item
-        const now = new Date().toISOString();
-        for (const item of matched) {
-          const { error: itemErr } = await db
-            .from('supplier_items')
-            .update({
-              status: 'processing',
-              extra_data: {
-                ...item.extra_data,
-                received: 'true',
-                received_at: now,
-              },
-            })
-            .eq('id', item.id);
-          if (itemErr) console.error('[Reception] item update error:', itemErr, item.id);
-        }
+    const normalizedCode = code.trim().toLowerCase();
+    const matched = items.filter(item => {
+      const val = item.original_data?.[column] ?? '';
+      return String(val).trim().toLowerCase() === normalizedCode;
+    });
 
-        // Optimistic local update
-        setItems(prev =>
-          prev.map(item => {
-            const val = item.original_data?.[selectedColumn] ?? '';
-            if (String(val).trim().toLowerCase() !== normalizedCode) return item;
-            return {
-              ...item,
-              status: 'processing' as const,
-              extra_data: { ...item.extra_data, received: 'true', received_at: now },
-            };
-          }),
-        );
+    if (matched.length === 0) {
+      console.log('[Reception][PkgID] No items found for code:', code);
+      showToast(`PkgID non trovato: ${code}`, 'error');
+      return;
+    }
 
-        const countLabel = matched.length === 1 ? '1 articolo ricevuto' : `${matched.length} articoli ricevuti`;
-        showToast(`${countLabel} per ${selectedColumn}: ${code}`, 'success');
-        console.log('[Reception] handleScanned success', { code, column: selectedColumn, count: matched.length });
-      } catch (err: any) {
-        console.error('[Reception] handleScanned error:', err);
-        showToast(err?.message ?? 'Errore durante la scansione', 'error');
-      } finally {
-        setProcessingCode(false);
-      }
-    },
-    [items, file, fileId, processingCode, selectedColumn, showToast],
-  );
+    const alreadyReceived = matched.every(item => item.extra_data?.received === 'true');
+    if (alreadyReceived) {
+      console.log('[Reception][PkgID] Already received:', code);
+      showToast(`PkgID già scansionato: ${code}`, 'error');
+      return;
+    }
+
+    console.log('[Reception][PkgID] Marking', matched.length, 'items for pkgid:', code);
+
+    // Ensure extra_columns
+    const currentExtraColumns: string[] = file?.extra_columns ?? [];
+    const newColumns = ['received', 'received_at'].filter(c => !currentExtraColumns.includes(c));
+    if (newColumns.length > 0) {
+      const { error: colErr } = await db
+        .from('supplier_files')
+        .update({ extra_columns: [...currentExtraColumns, ...newColumns] })
+        .eq('id', fileId);
+      if (colErr) console.error('[Reception][PkgID] extra_columns update error:', colErr);
+      else setFile(prev => prev ? { ...prev, extra_columns: [...currentExtraColumns, ...newColumns] } : prev);
+    }
+
+    const now = new Date().toISOString();
+    for (const item of matched) {
+      const { error: itemErr } = await db
+        .from('supplier_items')
+        .update({
+          status: 'processing',
+          extra_data: { ...item.extra_data, received: 'true', received_at: now },
+        })
+        .eq('id', item.id);
+      if (itemErr) console.error('[Reception][PkgID] item update error:', itemErr, item.id);
+    }
+
+    setItems(prev =>
+      prev.map(item => {
+        const val = item.original_data?.[column] ?? '';
+        if (String(val).trim().toLowerCase() !== normalizedCode) return item;
+        return { ...item, status: 'processing' as const, extra_data: { ...item.extra_data, received: 'true', received_at: now } };
+      }),
+    );
+
+    const countLabel = matched.length === 1 ? '1 articolo ricevuto' : `${matched.length} articoli ricevuti`;
+    showToast(`${countLabel} per PkgID: ${code}`, 'success');
+    console.log('[Reception][PkgID] Success', { code, count: matched.length });
+  }, [file, items, fileId, showToast]);
+
+  // ── LPN scan handler ───────────────────────────────────────────────────────
+
+  const handleLpnScan = useCallback(async (code: string) => {
+    const column = file?.lpn_column;
+    if (!column) return;
+    console.log('[Reception][LPN] handleLpnScan', { code, column });
+
+    const normalizedCode = code.trim().toLowerCase();
+    const matched = items.find(item => {
+      const val = item.original_data?.[column] ?? '';
+      return String(val).trim().toLowerCase() === normalizedCode;
+    });
+
+    if (!matched) {
+      console.log('[Reception][LPN] LPN not found:', code);
+      showToast(`LPN non trovato: ${code}`, 'error');
+      return;
+    }
+
+    if (matched.extra_data?.received === 'true') {
+      console.log('[Reception][LPN] LPN already scanned:', code);
+      showToast(`LPN già scansionato: ${code}`, 'warning');
+      return;
+    }
+
+    console.log('[Reception][LPN] Marking item as received, id:', matched.id);
+
+    const now = new Date().toISOString();
+    const { error: itemErr } = await db
+      .from('supplier_items')
+      .update({
+        status: 'processing',
+        extra_data: { ...matched.extra_data, received: 'true', received_at: now },
+      })
+      .eq('id', matched.id);
+
+    if (itemErr) {
+      console.error('[Reception][LPN] item update error:', itemErr);
+      showToast('Errore durante l\'aggiornamento', 'error');
+      return;
+    }
+
+    setItems(prev =>
+      prev.map(item =>
+        item.id === matched.id
+          ? { ...item, status: 'processing' as const, extra_data: { ...item.extra_data, received: 'true', received_at: now } }
+          : item,
+      ),
+    );
+
+    showToast(`LPN ricevuto: ${code}`, 'success');
+    console.log('[Reception][LPN] Success', { code, itemId: matched.id });
+  }, [file, items, showToast]);
+
+  // ── EAN scan handler ───────────────────────────────────────────────────────
+
+  const handleEanScan = useCallback(async (code: string) => {
+    if (!eanColumn) return;
+    console.log('[Reception][EAN] handleEanScan', { code, eanColumn });
+
+    const normalizedCode = code.trim().toLowerCase();
+    const matched = items.find(item => {
+      const val = item.original_data?.[eanColumn] ?? '';
+      return String(val).trim().toLowerCase() === normalizedCode;
+    });
+
+    if (!matched) {
+      console.log('[Reception][EAN] EAN not found:', code);
+      showToast(`EAN non trovato: ${code}`, 'error');
+      return;
+    }
+
+    const eanKey = String(matched.original_data?.[eanColumn] ?? '').trim();
+    const totalQty = matched.quantita ?? 1;
+    const currentCount = eanCounts[eanKey] ?? 0;
+
+    if (currentCount >= totalQty) {
+      console.log('[Reception][EAN] Max quantity reached for:', eanKey, `(${currentCount}/${totalQty})`);
+      showToast(`Quantità massima raggiunta per ${eanKey} (${totalQty}/${totalQty})`, 'error');
+      return;
+    }
+
+    const newCount = currentCount + 1;
+    console.log('[Reception][EAN] Incrementing count for', eanKey, ':', currentCount, '->', newCount, '/', totalQty);
+
+    const isNowComplete = newCount >= totalQty;
+    const updatePayload: Record<string, unknown> = {
+      extra_data: {
+        ...matched.extra_data,
+        ean_received_qty: String(newCount),
+        ...(isNowComplete ? { received: 'true', received_at: new Date().toISOString() } : {}),
+      },
+      ...(isNowComplete ? { status: 'processing' } : {}),
+    };
+
+    const { error: itemErr } = await db
+      .from('supplier_items')
+      .update(updatePayload)
+      .eq('id', matched.id);
+
+    if (itemErr) {
+      console.error('[Reception][EAN] item update error:', itemErr);
+      showToast('Errore durante l\'aggiornamento', 'error');
+      return;
+    }
+
+    // Update local eanCounts
+    setEanCounts(prev => ({ ...prev, [eanKey]: newCount }));
+
+    // Optimistic local items update
+    setItems(prev =>
+      prev.map(item => {
+        if (item.id !== matched.id) return item;
+        return {
+          ...item,
+          status: isNowComplete ? ('processing' as const) : item.status,
+          extra_data: {
+            ...item.extra_data,
+            ean_received_qty: String(newCount),
+            ...(isNowComplete ? { received: 'true', received_at: new Date().toISOString() } : {}),
+          },
+        };
+      }),
+    );
+
+    if (isNowComplete) {
+      showToast(`EAN completato: ${eanKey} (${newCount}/${totalQty})`, 'success');
+    } else {
+      showToast(`EAN scansionato: ${eanKey} (${newCount}/${totalQty})`, 'success');
+    }
+    console.log('[Reception][EAN] Success', { eanKey, newCount, totalQty, isNowComplete });
+  }, [eanColumn, items, eanCounts, showToast]);
+
+  // ── Unified scan dispatcher ────────────────────────────────────────────────
+
+  const handleScanned = useCallback(async (code: string) => {
+    if (processingCode) return;
+    setProcessingCode(true);
+    console.log('[Reception] handleScanned dispatching, mode:', scanMode, 'code:', code);
+    try {
+      if (scanMode === 'pkgid') await handlePkgIdScan(code);
+      else if (scanMode === 'lpn') await handleLpnScan(code);
+      else if (scanMode === 'ean') await handleEanScan(code);
+    } finally {
+      setProcessingCode(false);
+    }
+  }, [processingCode, scanMode, handlePkgIdScan, handleLpnScan, handleEanScan]);
 
   // ── Mark complete ──────────────────────────────────────────────────────────
 
@@ -318,17 +627,70 @@ export default function ReceptionScreen() {
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
-  const hasColumn = selectedColumn !== null;
-  const groups = hasColumn ? groupByPkgId(items, selectedColumn!) : [];
-  const scannedCount = groups.filter(g => g.isReceived).length;
-  const totalCount = groups.length;
-  const progressRatio = totalCount > 0 ? scannedCount / totalCount : 0;
   const isAlreadyReceived = file?.status === 'received';
 
-  const progressLabel = `${scannedCount} / ${totalCount} ${selectedColumn ?? 'ID'} scansionati`;
+  // PkgID groups
+  const pkgGroups = useMemo(() => {
+    if (scanMode !== 'pkgid' || !file?.pkgid_column) return [];
+    return groupByPkgId(items, file.pkgid_column);
+  }, [scanMode, file, items]);
 
-  // All column headers for the picker
-  const allColumns = items.length > 0 ? Object.keys(items[0].original_data ?? {}) : [];
+  // LPN rows
+  const lpnRows = useMemo((): LpnRow[] => {
+    if (scanMode !== 'lpn' || !file?.lpn_column) return [];
+    const column = file.lpn_column;
+    return items
+      .map(item => ({
+        lpnValue: String(item.original_data?.[column] ?? '').trim() || '—',
+        item,
+        isReceived: item.extra_data?.received === 'true',
+      }))
+      .sort((a, b) => {
+        if (a.isReceived === b.isReceived) return a.lpnValue.localeCompare(b.lpnValue);
+        return a.isReceived ? 1 : -1;
+      });
+  }, [scanMode, file, items]);
+
+  // EAN rows
+  const eanRows = useMemo((): EanRow[] => {
+    if (scanMode !== 'ean' || !eanColumn) return [];
+    return items.map(item => {
+      const eanValue = String(item.original_data?.[eanColumn] ?? '').trim() || '—';
+      const totalQty = item.quantita ?? 1;
+      const receivedQty = eanCounts[eanValue] ?? Number(item.extra_data?.ean_received_qty ?? 0);
+      return { eanValue, item, receivedQty, totalQty };
+    }).sort((a, b) => {
+      const aComplete = a.receivedQty >= a.totalQty;
+      const bComplete = b.receivedQty >= b.totalQty;
+      if (aComplete !== bComplete) return aComplete ? 1 : -1;
+      return a.eanValue.localeCompare(b.eanValue);
+    });
+  }, [scanMode, eanColumn, items, eanCounts]);
+
+  // Progress
+  const { progressScanned, progressTotal, progressLabel } = useMemo(() => {
+    if (scanMode === 'pkgid') {
+      const scanned = pkgGroups.filter(g => g.isReceived).length;
+      const total = pkgGroups.length;
+      return { progressScanned: scanned, progressTotal: total, progressLabel: `${scanned} / ${total} colli scansionati` };
+    }
+    if (scanMode === 'lpn') {
+      const scanned = lpnRows.filter(r => r.isReceived).length;
+      const total = lpnRows.length;
+      return { progressScanned: scanned, progressTotal: total, progressLabel: `${scanned} / ${total} LPN scansionati` };
+    }
+    if (scanMode === 'ean') {
+      const scanned = eanRows.reduce((sum, r) => sum + r.receivedQty, 0);
+      const total = eanRows.reduce((sum, r) => sum + r.totalQty, 0);
+      return { progressScanned: scanned, progressTotal: total, progressLabel: `${scanned} / ${total} unità scansionate` };
+    }
+    return { progressScanned: 0, progressTotal: 0, progressLabel: '—' };
+  }, [scanMode, pkgGroups, lpnRows, eanRows]);
+
+  const progressRatio = progressTotal > 0 ? progressScanned / progressTotal : 0;
+
+  const scanModeLabel = scanMode === 'pkgid' ? 'PkgID' : scanMode === 'lpn' ? 'LPN' : scanMode === 'ean' ? 'EAN' : '—';
+  const scanHint = scanMode === 'pkgid' ? 'Inquadra il barcode del collo (PkgID)' : scanMode === 'lpn' ? 'Inquadra il barcode LPN' : 'Inquadra il codice EAN';
 
   // ── Loading ────────────────────────────────────────────────────────────────
 
@@ -355,8 +717,17 @@ export default function ReceptionScreen() {
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ padding: 16, paddingBottom: 120, gap: 16 }}
       >
+        {/* Mode selector */}
+        <ModeSelector
+          currentMode={scanMode}
+          pkgidAvailable={pkgidAvailable}
+          lpnAvailable={lpnAvailable}
+          eanAvailable={eanAvailable}
+          onSelect={handleModeChange}
+        />
+
         {/* Progress card */}
-        {hasColumn && items.length > 0 && (
+        {scanMode !== null && items.length > 0 && (
           <View style={styles.progressCard}>
             <View style={styles.progressHeader}>
               <Text style={styles.progressLabel}>{progressLabel}</Text>
@@ -371,10 +742,10 @@ export default function ReceptionScreen() {
         )}
 
         {/* Scan button */}
-        {!isAlreadyReceived && hasColumn && (
+        {!isAlreadyReceived && scanMode !== null && (
           <AnimatedPressable
             onPress={() => {
-              console.log('[Reception] Open scanner pressed, column:', selectedColumn);
+              console.log('[Reception] Open scanner pressed, mode:', scanMode);
               setScannerOpen(true);
             }}
           >
@@ -382,45 +753,38 @@ export default function ReceptionScreen() {
               <ScanLine size={22} color="#FFFFFF" />
               <View style={{ alignItems: 'center' }}>
                 <Text style={styles.scanButtonText}>Scansiona Barcode</Text>
-                <Text style={styles.scanButtonSubtext}>Colonna: {selectedColumn}</Text>
+                <Text style={styles.scanButtonSubtext}>Modalità: {scanModeLabel}</Text>
               </View>
             </View>
           </AnimatedPressable>
         )}
 
-        {/* Column picker — shown when no column detected and items exist */}
-        {items.length > 0 && !hasColumn && (
-          <ColumnPicker
-            columns={allColumns}
-            onSelect={col => setSelectedColumn(col)}
-          />
-        )}
-
-        {/* Change column link — shown when a column is selected */}
-        {hasColumn && items.length > 0 && (
-          <View style={styles.changeColumnRow}>
-            <Text style={styles.changeColumnLabel}>
-              Colonna identificatore:
-            </Text>
-            <Text style={styles.changeColumnValue}>{selectedColumn}</Text>
-            <TouchableOpacity
-              onPress={() => {
-                console.log('[Reception] Change column pressed, current:', selectedColumn);
-                setSelectedColumn(null);
-              }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.changeColumnLink}>Cambia</Text>
-            </TouchableOpacity>
+        {/* PkgID groups list */}
+        {scanMode === 'pkgid' && pkgGroups.length > 0 && (
+          <View style={{ gap: 10 }}>
+            <Text style={styles.sectionTitle}>Gruppi PkgID</Text>
+            {pkgGroups.map(group => (
+              <PkgGroupCard key={group.pkgId} group={group} />
+            ))}
           </View>
         )}
 
-        {/* Groups list */}
-        {hasColumn && groups.length > 0 && (
+        {/* LPN list */}
+        {scanMode === 'lpn' && lpnRows.length > 0 && (
           <View style={{ gap: 10 }}>
-            <Text style={styles.sectionTitle}>Gruppi {selectedColumn}</Text>
-            {groups.map(group => (
-              <PkgGroupCard key={group.pkgId} group={group} />
+            <Text style={styles.sectionTitle}>LPN</Text>
+            {lpnRows.map(row => (
+              <LpnRowCard key={row.item.id} row={row} />
+            ))}
+          </View>
+        )}
+
+        {/* EAN list */}
+        {scanMode === 'ean' && eanRows.length > 0 && (
+          <View style={{ gap: 10 }}>
+            <Text style={styles.sectionTitle}>Articoli EAN</Text>
+            {eanRows.map(row => (
+              <EanRowCard key={row.item.id} row={row} />
             ))}
           </View>
         )}
@@ -461,7 +825,7 @@ export default function ReceptionScreen() {
           setScannerOpen(false);
         }}
         onScanned={handleScanned}
-        hint={selectedColumn ? `Inquadra il barcode di ${selectedColumn}` : 'Inquadra il barcode'}
+        hint={scanHint}
       />
 
       <ToastMessage
@@ -477,6 +841,54 @@ export default function ReceptionScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
+  // Mode selector
+  modeSelectorCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: 12,
+  },
+  modeSelectorTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  modeSelectorRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modeCard: {
+    flex: 1,
+    backgroundColor: COLORS.surfaceSecondary,
+    borderRadius: 12,
+    padding: 12,
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  modeCardDisabled: {
+    opacity: 0.4,
+  },
+  modeCardLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  modeCardLabelDisabled: {
+    color: COLORS.textTertiary,
+  },
+  modeCardSubtitle: {
+    fontSize: 10,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 14,
+  },
+
   // Progress
   progressCard: {
     backgroundColor: COLORS.surface,
@@ -535,60 +947,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // Change column row
-  changeColumnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 2,
-  },
-  changeColumnLabel: {
-    fontSize: 13,
-    color: COLORS.textSecondary,
-  },
-  changeColumnValue: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.text,
-    flex: 1,
-  },
-  changeColumnLink: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: COLORS.primary,
-  },
-
-  // Column picker
-  columnPickerCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-    gap: 4,
-  },
-  columnPickerTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: 10,
-    lineHeight: 20,
-  },
-  columnPickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-  },
-  columnPickerRowText: {
-    flex: 1,
-    fontSize: 15,
-    color: COLORS.text,
-    fontWeight: '500',
-  },
-
   // Section title
   sectionTitle: {
     fontSize: 14,
@@ -596,7 +954,7 @@ const styles = StyleSheet.create({
     color: COLORS.text,
   },
 
-  // Group cards
+  // Group cards (shared PkgID / LPN)
   groupCard: {
     backgroundColor: COLORS.surface,
     borderRadius: 12,
@@ -619,13 +977,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   groupPkgId: {
-    fontSize: 17,
-    fontWeight: '800',
+    fontSize: 15,
+    fontWeight: '700',
     color: COLORS.text,
   },
   groupPkgIdReceived: {
-    fontSize: 17,
-    fontWeight: '800',
+    fontSize: 15,
+    fontWeight: '700',
     color: '#15803D',
   },
   groupCount: {
@@ -656,6 +1014,48 @@ const styles = StyleSheet.create({
   groupItemCodesReceived: {
     fontSize: 11,
     color: '#16A34A',
+  },
+
+  // EAN cards
+  eanCardPartial: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#D97706',
+    gap: 6,
+  },
+  eanPkgIdPartial: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#92400E',
+  },
+  eanCountPartial: {
+    fontSize: 12,
+    color: '#D97706',
+    marginTop: 2,
+  },
+  eanQtyBadgeGreen: {
+    backgroundColor: '#16A34A',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  eanQtyBadgeGreenText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  eanQtyBadgeYellow: {
+    backgroundColor: '#D97706',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  eanQtyBadgeYellowText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 
   // Received banner
@@ -690,5 +1090,4 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
-
 });
