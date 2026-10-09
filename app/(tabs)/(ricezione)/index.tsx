@@ -424,12 +424,31 @@ export default function RicezioneScreen() {
           const isNowComplete = newCount >= quantita;
           // Bug 3 fix — set status 'processing' and received:'true' on first scan, not only when complete
           const isFirstScan = newCount === 1;
+
+          // Fetch fresh extra_data from DB to avoid overwriting fields (Lotto, LottoId, SKU, etc.)
+          // that may have been written after eanItems was loaded into memory.
+          console.log('[Ricezione] EAN fetching fresh extra_data for item:', matchedItem.id);
+          const { data: freshItemData, error: freshErr } = await db
+            .from('supplier_items')
+            .select('extra_data')
+            .eq('id', matchedItem.id)
+            .single();
+          if (freshErr) {
+            console.warn('[Ricezione] EAN fresh extra_data fetch error (falling back to cached):', freshErr);
+          }
+          const freshExtraData = (freshItemData?.extra_data as Record<string, unknown> | null) ?? null;
+          console.log('[Ricezione] EAN fresh extra_data from DB:', JSON.stringify(freshExtraData));
+          // Merge: start from cached snapshot, overlay fresh DB fields, then apply new ean_received_qty
+          const mergedExtraData: Record<string, unknown> = {
+            ...(matchedItem.extra_data as Record<string, unknown> ?? {}),
+            ...(freshExtraData ?? {}),
+            ean_received_qty: newCount,
+            ...(isFirstScan || isNowComplete ? { received: 'true', received_at: now } : {}),
+          };
+          console.log('[Ricezione] EAN merged extra_data:', JSON.stringify(mergedExtraData));
+
           const updatePayload: Record<string, unknown> = {
-            extra_data: {
-              ...(matchedItem.extra_data as Record<string, unknown> ?? {}),
-              ean_received_qty: newCount,
-              ...(isFirstScan || isNowComplete ? { received: 'true', received_at: now } : {}),
-            },
+            extra_data: mergedExtraData,
             ...(isFirstScan || isNowComplete ? { status: 'processing' } : {}),
           };
 

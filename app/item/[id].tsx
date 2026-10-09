@@ -334,6 +334,7 @@ export default function ItemDetailScreen() {
 
       // ── Lotto reconciliation: if lotto_id on the DB record differs from extra_data,
       //    the item was moved via Scarico and extra_data is stale. Reconcile from DB.
+      console.log('[ItemDetail] raw extra_data from DB:', JSON.stringify(fetchedItem.extra_data));
       const qtyTotale = fetchedItem.quantita ?? 1;
       const eanReceived = (fetchedItem.extra_data as any)?.ean_received_qty;
       // Usa le unità ricevute se disponibili, altrimenti la quantità totale
