@@ -694,25 +694,28 @@ export default function RicezioneScreen() {
     setCompletingRicezione(true);
     const now = new Date().toISOString();
     try {
-      const updates = itemsToUpdate.map(({ ean, item }) => ({
-        id: item.id,
-        extra_data: {
-          ...(item.extra_data as Record<string, unknown> ?? {}),
-          ean_received_qty: eanCounts[ean] ?? 0,
-          received: 'true',
-          received_at: now,
-        },
-        status: 'processing' as const,
-      }));
-      console.log('[Ricezione] handleCompletaRicezione — sending batch upsert, count:', updates.length);
-      const { error: batchErr } = await db
-        .from('supplier_items')
-        .upsert(updates, { onConflict: 'id' });
-      if (batchErr) {
-        console.error('[Ricezione] handleCompletaRicezione — batch upsert error:', batchErr);
-        throw batchErr;
+      console.log('[Ricezione] handleCompletaRicezione — sending individual updates, count:', itemsToUpdate.length);
+      const updatePromises = itemsToUpdate.map(({ ean, item }) => {
+        const qty = eanCounts[ean] ?? 0;
+        return db
+          .from('supplier_items')
+          .update({
+            status: 'processing',
+            extra_data: {
+              ...(item.extra_data as Record<string, unknown> ?? {}),
+              ean_received_qty: qty,
+              received: 'true',
+              received_at: now,
+            },
+          })
+          .eq('id', item.id);
+      });
+      const results = await Promise.all(updatePromises);
+      const errors = results.filter(r => r.error);
+      if (errors.length > 0) {
+        console.error('[Ricezione] handleCompletaRicezione — some updates failed:', errors.map(r => r.error));
       }
-      const updatedCount = updates.length;
+      const updatedCount = results.length - errors.length;
       setReceivedItems(prev => prev + updatedCount);
       console.log('[Ricezione] handleCompletaRicezione — batch upsert done, updatedCount:', updatedCount);
       showToast(`Ricezione completata — ${updatedCount} articoli aggiornati`, 'success');
