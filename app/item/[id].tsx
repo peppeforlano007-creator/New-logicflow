@@ -73,9 +73,9 @@ function formatDate(dateStr: string): string {
   });
 }
 
-function getOriginalField(data: Record<string, string>, fieldName: string): string {
+function getOriginalField(data: Record<string, any>, fieldName: string): string {
   const key = Object.keys(data).find(k => k.toLowerCase() === fieldName.toLowerCase());
-  return key ? (data[key] ?? '') : '';
+  return key ? String(data[key] ?? '') : '';
 }
 
 function normalizeEAN(raw: string): string {
@@ -94,7 +94,7 @@ function normalizeEAN(raw: string): string {
   return trimmed;
 }
 
-function parseUnitCost(data: Record<string, string>): number | null {
+function parseUnitCost(data: Record<string, any>): number | null {
   const key = Object.keys(data).find(k => k.toLowerCase() === 'unitcost');
   if (!key) return null;
   const raw = String(data[key] ?? '').replace(',', '.');
@@ -102,12 +102,22 @@ function parseUnitCost(data: Record<string, string>): number | null {
   return isNaN(n) ? null : n;
 }
 
-function parseAmazonPrice(data: Record<string, string>): number | null {
-  const key = Object.keys(data).find(k => k.toLowerCase() === 'amazonprice');
+function parseAmazonPrice(data: Record<string, any>): number | null {
+  // Priority 1: exact normalized key 'AmazonPrice' (set by new import mapping)
+  // Priority 2: any key that normalizes to 'amazonprice' (handles spaces/underscores)
+  // Priority 3: any key containing 'amazon' (case-insensitive)
+  // Priority 4: any key containing 'price' or 'prezzo' (case-insensitive fallback)
+  const keys = Object.keys(data);
+  const key =
+    keys.find(k => k === 'AmazonPrice') ??
+    keys.find(k => k.toLowerCase().replace(/[\s_]/g, '') === 'amazonprice') ??
+    keys.find(k => k.toLowerCase().includes('amazon')) ??
+    keys.find(k => k.toLowerCase().includes('price') || k.toLowerCase().includes('prezzo'));
   if (!key) return null;
-  const raw = String(data[key] ?? '').replace(',', '.');
+  const raw = String(data[key] ?? '').replace(',', '.').trim();
   const n = parseFloat(raw);
-  return isNaN(n) ? null : n;
+  console.log('[parseAmazonPrice] key:', key, 'raw:', raw, 'parsed:', n);
+  return isNaN(n) || n <= 0 ? null : n;
 }
 
 function formatPrice(n: number): string {
@@ -137,8 +147,8 @@ export default function ItemDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const [originalData, setOriginalData] = useState<Record<string, string>>({});
-  const [extraData, setExtraData] = useState<Record<string, string>>({});
+  const [originalData, setOriginalData] = useState<Record<string, any>>({});
+  const [extraData, setExtraData] = useState<Record<string, any>>({});
 
   // AdjReason condition picker state
   const [selectedCondition, setSelectedCondition] = useState<string | null>(null);
