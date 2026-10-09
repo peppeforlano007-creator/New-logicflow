@@ -145,6 +145,8 @@ export default function RicezioneScreen() {
   const [eanCounts, setEanCounts] = useState<Record<string, number>>({});
   const [eanItems, setEanItems] = useState<EanItem[]>([]);
   const [loadingEan, setLoadingEan] = useState(false);
+  const [selectAll, setSelectAll] = useState(false);
+  const [completingRicezione, setCompletingRicezione] = useState(false);
   const errorBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bannerOpacity = useRef(new Animated.Value(0)).current;
   const inputRef = useRef<TextInput>(null);
@@ -417,57 +419,10 @@ export default function RicezioneScreen() {
           }
 
           const newCount = currentCount + 1;
-          console.log('[Ricezione] EAN incrementing count:', currentCount, '->', newCount, '/', quantita);
+          console.log('[Ricezione] EAN incrementing count (local only):', currentCount, '->', newCount, '/', quantita);
 
           setEanCounts(prev => ({ ...prev, [trimmed]: newCount }));
-
-          const isNowComplete = newCount >= quantita;
-          // Bug 3 fix — set status 'processing' and received:'true' on first scan, not only when complete
-          const isFirstScan = newCount === 1;
-
-          // Fetch fresh extra_data from DB to avoid overwriting fields (Lotto, LottoId, SKU, etc.)
-          // that may have been written after eanItems was loaded into memory.
-          console.log('[Ricezione] EAN fetching fresh extra_data for item:', matchedItem.id);
-          const { data: freshItemData, error: freshErr } = await db
-            .from('supplier_items')
-            .select('extra_data')
-            .eq('id', matchedItem.id)
-            .single();
-          if (freshErr) {
-            console.warn('[Ricezione] EAN fresh extra_data fetch error (falling back to cached):', freshErr);
-          }
-          const freshExtraData = (freshItemData?.extra_data as Record<string, unknown> | null) ?? null;
-          console.log('[Ricezione] EAN fresh extra_data from DB:', JSON.stringify(freshExtraData));
-          // Merge: start from cached snapshot, overlay fresh DB fields, then apply new ean_received_qty
-          const mergedExtraData: Record<string, unknown> = {
-            ...(matchedItem.extra_data as Record<string, unknown> ?? {}),
-            ...(freshExtraData ?? {}),
-            ean_received_qty: newCount,
-            ...(isFirstScan || isNowComplete ? { received: 'true', received_at: now } : {}),
-          };
-          console.log('[Ricezione] EAN merged extra_data:', JSON.stringify(mergedExtraData));
-
-          const updatePayload: Record<string, unknown> = {
-            extra_data: mergedExtraData,
-            ...(isFirstScan || isNowComplete ? { status: 'processing' } : {}),
-          };
-
-          console.log('[Ricezione] EAN update payload — isFirstScan:', isFirstScan, '| isNowComplete:', isNowComplete);
-
-          const { error: updateErr } = await db
-            .from('supplier_items')
-            .update(updatePayload)
-            .eq('id', matchedItem.id);
-
-          if (updateErr) {
-            console.error('[Ricezione] EAN item update error:', updateErr);
-          } else {
-            console.log('[Ricezione] EAN item updated in DB:', matchedItem.id, '| newCount:', newCount, '| complete:', isNowComplete, '| firstScan:', isFirstScan);
-          }
-
-          if (isFirstScan) {
-            setReceivedItems(prev => prev + 1);
-          }
+          setSelectAll(false);
 
           const eanInfo = `${newCount}/${quantita} unità ricevute`;
           const activeFileMap = new Map<string, SupplierFile>(activeFiles.map(f => [f.id, f]));
@@ -487,8 +442,8 @@ export default function RicezioneScreen() {
             ...prev.slice(0, 19),
           ]);
 
-          showToast(`EAN ${trimmed} — ${eanInfo}`, 'success');
-          console.log('[Ricezione] EAN processCode success:', { code: trimmed, newCount, quantita, isNowComplete });
+          showToast(`EAN ${trimmed} — ${newCount}/${quantita} unità`, 'success');
+          console.log('[Ricezione] EAN processCode success (local):', { code: trimmed, newCount, quantita });
           return;
         }
 
@@ -688,10 +643,85 @@ export default function RicezioneScreen() {
     console.log('[Ricezione] Column toggle pressed:', col);
     if (col !== 'EAN') {
       setEanCounts({});
+      setSelectAll(false);
       console.log('[Ricezione] EAN counts reset (switched away from EAN mode)');
     }
     setSelectedColumn(col);
   }, []);
+
+  // ── Select all EAN ─────────────────────────────────────────────────────────
+
+  const handleSelectAll = useCallback(() => {
+    if (selectAll) {
+      console.log('[Ricezione] Select all — deselecting all EAN items');
+      setEanCounts({});
+      setSelectAll(false);
+    } else {
+      console.log('[Ricezione] Select all — selecting all EAN items:', eanItems.length);
+      const allCounts: Record<string, number> = {};
+      for (const { ean, totalQty } of eanItems) {
+        allCounts[ean] = totalQty;
+      }
+      setEanCounts(allCounts);
+      setSelectAll(true);
+    }
+  }, [selectAll, eanItems]);
+
+  // ── Completa Ricezione ─────────────────────────────────────────────────────
+
+  const handleCompletaRicezione = useCallback(async () => {
+    console.log('[Ricezione] handleCompletaRicezione pressed');
+    const itemsToUpdate = eanItems.filter(({ ean }) => (eanCounts[ean] ?? 0) > 0);
+    if (itemsToUpdate.length === 0) {
+      console.log('[Ricezione] handleCompletaRicezione — nothing to update');
+      return;
+    }
+    console.log('[Ricezione] handleCompletaRicezione — updating', itemsToUpdate.length, 'items');
+    setCompletingRicezione(true);
+    const now = new Date().toISOString();
+    let updatedCount = 0;
+    try {
+      for (const { ean, item } of itemsToUpdate) {
+        const qty = eanCounts[ean] ?? 0;
+        console.log('[Ricezione] handleCompletaRicezione — fetching fresh extra_data for item:', item.id, '| ean:', ean, '| qty:', qty);
+        const { data: freshData, error: freshErr } = await db
+          .from('supplier_items')
+          .select('extra_data')
+          .eq('id', item.id)
+          .single();
+        if (freshErr) {
+          console.warn('[Ricezione] handleCompletaRicezione — fresh extra_data error for item:', item.id, freshErr);
+        }
+        const freshExtraData = (freshData?.extra_data as Record<string, unknown> | null) ?? {};
+        const newExtraData: Record<string, unknown> = {
+          ...freshExtraData,
+          ean_received_qty: qty,
+          received: 'true',
+          received_at: now,
+        };
+        console.log('[Ricezione] handleCompletaRicezione — updating item:', item.id, '| newExtraData:', JSON.stringify(newExtraData));
+        const { error: updateErr } = await db
+          .from('supplier_items')
+          .update({ extra_data: newExtraData, status: 'processing' })
+          .eq('id', item.id);
+        if (updateErr) {
+          console.error('[Ricezione] handleCompletaRicezione — update error for item:', item.id, updateErr);
+        } else {
+          updatedCount += 1;
+          console.log('[Ricezione] handleCompletaRicezione — item updated:', item.id);
+        }
+      }
+      setReceivedItems(prev => prev + updatedCount);
+      console.log('[Ricezione] handleCompletaRicezione — done, updatedCount:', updatedCount);
+      showToast(`Ricezione completata — ${updatedCount} articoli aggiornati`, 'success');
+      loadActiveFiles();
+    } catch (err: any) {
+      console.error('[Ricezione] handleCompletaRicezione exception:', err);
+      showToast(err?.message ?? 'Errore durante il completamento', 'error');
+    } finally {
+      setCompletingRicezione(false);
+    }
+  }, [eanItems, eanCounts, showToast, loadActiveFiles]);
 
   // ── Derived: global progress ───────────────────────────────────────────────
 
@@ -850,14 +880,51 @@ export default function RicezioneScreen() {
                   <Text style={styles.eanEmptyText}>Nessun articolo con EAN trovato nei file attivi</Text>
                 </View>
               ) : (
-                eanItems.map(ei => (
-                  <EanItemRow
-                    key={ei.ean}
-                    ean={ei.ean}
-                    totalQty={ei.totalQty}
-                    received={eanCounts[ei.ean] ?? 0}
-                  />
-                ))
+                <>
+                  {/* Select all row */}
+                  <TouchableOpacity
+                    style={styles.selectAllRow}
+                    onPress={handleSelectAll}
+                    activeOpacity={0.75}
+                  >
+                    <View style={[styles.selectAllCheckbox, selectAll && styles.selectAllCheckboxActive]}>
+                      {selectAll ? <Text style={styles.selectAllCheckmark}>✓</Text> : null}
+                    </View>
+                    <Text style={styles.selectAllText}>Seleziona tutto</Text>
+                  </TouchableOpacity>
+
+                  {eanItems.map(ei => (
+                    <EanItemRow
+                      key={ei.ean}
+                      ean={ei.ean}
+                      totalQty={ei.totalQty}
+                      received={eanCounts[ei.ean] ?? 0}
+                    />
+                  ))}
+
+                  {/* Completa Ricezione button */}
+                  {(() => {
+                    const hasAny = eanItems.some(({ ean }) => (eanCounts[ean] ?? 0) > 0);
+                    return (
+                      <TouchableOpacity
+                        style={[
+                          styles.completaBtn,
+                          (!hasAny || completingRicezione) && { opacity: 0.4 },
+                        ]}
+                        onPress={handleCompletaRicezione}
+                        disabled={!hasAny || completingRicezione}
+                        activeOpacity={0.8}
+                      >
+                        {completingRicezione ? (
+                          <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : null}
+                        <Text style={styles.completaBtnText}>
+                          {completingRicezione ? 'Salvataggio...' : 'Completa Ricezione'}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })()}
+                </>
               )}
             </View>
           )}
@@ -1235,5 +1302,58 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.textTertiary,
     textAlign: 'center',
+  },
+
+  // Select all row
+  selectAllRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  selectAllCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: '#9CA3AF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  selectAllCheckboxActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  selectAllCheckmark: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  selectAllText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+
+  // Completa Ricezione button
+  completaBtn: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 16,
+    width: '100%',
+  },
+  completaBtnText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
 });
