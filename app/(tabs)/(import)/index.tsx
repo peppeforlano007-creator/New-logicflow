@@ -163,6 +163,8 @@ export default function ImportScreen() {
     unitrecovery: null,
   });
   const [activePicker, setActivePicker] = useState<MappingKey | null>(null);
+  const [colsReady, setColsReady] = useState(false);
+  const colsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resetMappings = useCallback(() => {
     setMappings({
@@ -177,6 +179,17 @@ export default function ImportScreen() {
     });
     setActivePicker(null);
   }, []);
+
+  // Mark cols as ready and clear timeout when columns arrive
+  useEffect(() => {
+    if (previewCols.length > 0) {
+      setColsReady(true);
+      if (colsTimeoutRef.current) {
+        clearTimeout(colsTimeoutRef.current);
+        colsTimeoutRef.current = null;
+      }
+    }
+  }, [previewCols]);
 
   // Auto-apply mappings when previewCols becomes available
   useEffect(() => {
@@ -258,8 +271,22 @@ export default function ImportScreen() {
       setSelectedFile(asset);
       setPreviewRows(0);
       setPreviewCols([]);
+      setColsReady(false);
       resetMappings();
       setModalVisible(true);
+
+      // 10-second safety timeout — unblock picker with a clear message if parse never resolves
+      if (colsTimeoutRef.current) clearTimeout(colsTimeoutRef.current);
+      colsTimeoutRef.current = setTimeout(() => {
+        setPreviewCols(prev => {
+          if (prev.length === 0) {
+            console.warn('[Import] Column parse timeout — setting fallback placeholder');
+            return ['— nessuna colonna rilevata —'];
+          }
+          return prev;
+        });
+        colsTimeoutRef.current = null;
+      }, 10000);
 
       // Quick preview: read base64 and parse headers locally (CSV + XLSX)
       try {
@@ -498,6 +525,8 @@ export default function ImportScreen() {
         console.log('[Import] Items inserted successfully');
       }
 
+      if (colsTimeoutRef.current) { clearTimeout(colsTimeoutRef.current); colsTimeoutRef.current = null; }
+      setColsReady(false);
       setModalVisible(false);
       setSelectedFile(null);
       setImportedBy('');
@@ -713,6 +742,8 @@ export default function ImportScreen() {
         presentationStyle="formSheet"
         onRequestClose={() => {
           console.log('[Import] Modal closed');
+          if (colsTimeoutRef.current) { clearTimeout(colsTimeoutRef.current); colsTimeoutRef.current = null; }
+          setColsReady(false);
           setModalVisible(false);
           resetMappings();
         }}
@@ -737,6 +768,8 @@ export default function ImportScreen() {
             <AnimatedPressable
               onPress={() => {
                 console.log('[Import] Modal dismiss button pressed');
+                if (colsTimeoutRef.current) { clearTimeout(colsTimeoutRef.current); colsTimeoutRef.current = null; }
+                setColsReady(false);
                 setModalVisible(false);
                 resetMappings();
               }}
@@ -916,11 +949,12 @@ export default function ImportScreen() {
                           setActivePicker(field.key);
                         }}
                         activeOpacity={0.8}
+                        disabled={!colsReady}
                         style={{
-                          backgroundColor: hasValue ? COLORS.primaryMuted : COLORS.background,
+                          backgroundColor: !colsReady ? COLORS.surfaceSecondary : hasValue ? COLORS.primaryMuted : COLORS.background,
                           borderRadius: 10,
                           borderWidth: 1,
-                          borderColor: hasValue ? field.color : COLORS.border,
+                          borderColor: !colsReady ? COLORS.border : hasValue ? field.color : COLORS.border,
                           paddingHorizontal: 12,
                           paddingVertical: 9,
                           flexDirection: 'row',
@@ -928,20 +962,24 @@ export default function ImportScreen() {
                           justifyContent: 'space-between',
                           alignSelf: 'flex-start',
                           minWidth: 160,
+                          opacity: !colsReady ? 0.6 : 1,
                         }}
                       >
                         <Text
                           style={{
                             fontSize: 13,
                             fontWeight: hasValue ? '600' : '400',
-                            color: hasValue ? field.color : COLORS.textTertiary,
+                            color: !colsReady ? COLORS.textTertiary : hasValue ? field.color : COLORS.textTertiary,
                             flex: 1,
                           }}
                           numberOfLines={1}
                         >
                           {chipLabel}
                         </Text>
-                        <ChevronDown size={14} color={hasValue ? field.color : COLORS.textTertiary} />
+                        {!colsReady
+                          ? <ActivityIndicator size="small" color={COLORS.textTertiary} />
+                          : <ChevronDown size={14} color={hasValue ? field.color : COLORS.textTertiary} />
+                        }
                       </TouchableOpacity>
                     </View>
                   );
@@ -1032,8 +1070,8 @@ export default function ImportScreen() {
           )}
 
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-            {/* Loading state when columns not yet available */}
-            {previewCols.length === 0 && (
+            {/* Loading state — only shown if picker is opened before cols are ready (edge case) */}
+            {!colsReady && (
               <View style={{ alignItems: 'center', paddingVertical: 32, gap: 12 }}>
                 <ActivityIndicator color={COLORS.primary} />
                 <Text style={{ color: COLORS.textSecondary, fontSize: 14, textAlign: 'center' }}>
