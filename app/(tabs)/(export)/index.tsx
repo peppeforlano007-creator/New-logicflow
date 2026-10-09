@@ -142,9 +142,20 @@ export default function ExportScreen() {
     console.log('[Export] handleMarkShortage called', { fileId, fileName });
     setMarkingShortageId(fileId);
     try {
+      // Step 1 — fetch adjreason_column from supplier_files
+      const { data: fileData } = await db
+        .from('supplier_files')
+        .select('adjreason_column')
+        .eq('id', fileId)
+        .single();
+
+      const adjreasonColumn: string | null = (fileData as any)?.adjreason_column ?? null;
+      console.log('[Export] handleMarkShortage adjreasonColumn:', adjreasonColumn);
+
+      // Fetch pending items with quantita
       const { data: pendingItems, error: fetchError } = await db
         .from('supplier_items')
-        .select('id, original_data')
+        .select('id, original_data, extra_data, quantita')
         .eq('file_id', fileId)
         .eq('status', 'pending');
 
@@ -154,18 +165,58 @@ export default function ExportScreen() {
         return;
       }
 
-      const updates = pendingItems.map((item: any) =>
-        db
+      console.log('[Export] handleMarkShortage pending items:', pendingItems.length);
+
+      // Step 2 — build update payload per item
+      const updates = (pendingItems as any[]).map((item) => {
+        const qty: number = (item.quantita as number) ?? 1;
+        const existingExtra: Record<string, any> = (item.extra_data as Record<string, any>) ?? {};
+        const existingOriginal: Record<string, any> = (item.original_data as Record<string, any>) ?? {};
+
+        let newExtraData: Record<string, any>;
+
+        if (qty <= 1) {
+          newExtraData = {
+            ...existingExtra,
+            AdjReason: 'shortage',
+          };
+        } else {
+          // Expand into N units, each with AdjReason: 'shortage'
+          const units = Array.from({ length: qty }, (_, i) => ({
+            unitIndex: i + 1,
+            Selezione: '',
+            PrezzoVendita: '',
+            AdjReason: 'shortage',
+            SKU: '',
+            Lotto: '',
+            LottoId: '',
+            EANCorretto: '',
+            ASINCorretto: '',
+            processed_at: new Date().toISOString(),
+            processed_by: 'sistema',
+          }));
+          newExtraData = { ...existingExtra, AdjReason: 'shortage', units };
+        }
+
+        // Also update original_data[adjreasonColumn] if the column is mapped
+        const newOriginalData = adjreasonColumn
+          ? { ...existingOriginal, [adjreasonColumn]: 'shortage' }
+          : existingOriginal;
+
+        return db
           .from('supplier_items')
           .update({
-            original_data: { ...item.original_data, AdjReason: 'shortage' },
+            extra_data: newExtraData,
+            original_data: newOriginalData,
+            status: 'completed',
           })
-          .eq('id', item.id)
-      );
+          .eq('id', item.id);
+      });
       await Promise.all(updates);
 
-      console.log('[Export] marked', pendingItems.length, 'items as shortage');
-      showToast(`${pendingItems.length} articoli segnati come non ricevuti`, 'success');
+      const totalUnits = (pendingItems as any[]).reduce((sum: number, i: any) => sum + ((i.quantita as number) ?? 1), 0);
+      console.log('[Export] handleMarkShortage marked', pendingItems.length, 'items,', totalUnits, 'total units');
+      showToast(`${totalUnits} unità segnate come non ricevute`, 'success');
     } catch (err: any) {
       console.error('[Export] handleMarkShortage error:', err);
       showToast(err?.message ?? 'Errore', 'error');
