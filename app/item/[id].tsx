@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -380,6 +381,11 @@ export default function ItemDetailScreen() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useFocusEffect(useCallback(() => {
+    console.log('[ItemDetail] screen focused, refreshing lotti');
+    fetchLotti();
+  }, [fetchLotti]));
 
   // Recompute prezzoVendita when selezione changes, but only after mount
   useEffect(() => {
@@ -1261,7 +1267,8 @@ export default function ItemDetailScreen() {
               <AnimatedPressable
                 style={{ flex: 1 }}
                 onPress={() => {
-                  console.log('[ItemDetail] lotto selector pressed, opening modal');
+                  console.log('[ItemDetail] lotto selector pressed, refreshing lotti and opening modal');
+                  fetchLotti();
                   setLottoModalVisible(true);
                 }}
               >
