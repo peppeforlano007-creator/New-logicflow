@@ -230,27 +230,48 @@ export default function ImportScreen() {
       resetMappings();
       setModalVisible(true);
 
-      // Quick preview: read base64 and call edge function for preview
+      // Quick preview: read base64 and parse headers locally (CSV + XLSX)
       try {
         const base64 = await readFileAsBase64(asset.uri);
 
-        // Immediately extract headers locally for instant picker population (CSV only)
+        // Parse headers locally — works for both CSV and XLSX
         try {
           const isCSV = asset.name.toLowerCase().endsWith('.csv');
+          const isXLSX = asset.name.toLowerCase().endsWith('.xlsx') || asset.name.toLowerCase().endsWith('.xls');
+
           if (isCSV) {
             const text = atob(base64);
             const firstLine = text.split(/\r?\n/)[0] ?? '';
-            const cols = firstLine.split(',').map(h => h.replace(/^"|"$/g, '').trim()).filter(Boolean);
+            // Handle tab-separated too
+            const sep = firstLine.includes('\t') ? '\t' : ',';
+            const cols = firstLine.split(sep).map(h => h.replace(/^"|"$/g, '').trim()).filter(Boolean);
             if (cols.length > 0) {
               console.log('[Import] Local CSV headers extracted:', cols);
               setPreviewCols(cols);
+            }
+          } else if (isXLSX) {
+            const XLSX = await import('xlsx');
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const workbook = XLSX.read(bytes, { type: 'array' });
+            const sheetName = workbook.SheetNames[0];
+            const sheet = workbook.Sheets[sheetName];
+            const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+            const headerRow: string[] = (jsonRows[0] as string[]) ?? [];
+            const cols = headerRow.map(h => String(h ?? '').trim()).filter(Boolean);
+            if (cols.length > 0) {
+              console.log('[Import] Local XLSX headers extracted:', cols);
+              setPreviewCols(cols);
+              // Also set row count from local parse
+              setPreviewRows(Math.max(0, jsonRows.length - 1));
             }
           }
         } catch (localErr) {
           console.warn('[Import] Local header extraction failed:', localErr);
         }
 
-        console.log('[Import] Calling parse-supplier-file for preview');
+        console.log('[Import] Calling parse-supplier-file for preview (authoritative overwrite)');
         const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-supplier-file`, {
           method: 'POST',
           headers: {
@@ -303,30 +324,48 @@ export default function ImportScreen() {
 
     try {
       const base64 = await readFileAsBase64(selectedFile.uri);
-      console.log('[Import] Calling parse-supplier-file edge function');
+      console.log('[Import] Parsing file locally for import:', selectedFile.name);
 
-      const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-supplier-file`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        },
-        body: JSON.stringify({ file_base64: base64, file_name: selectedFile.name }),
-      });
+      const isCSV = selectedFile.name.toLowerCase().endsWith('.csv');
+      const isXLSX = selectedFile.name.toLowerCase().endsWith('.xlsx') || selectedFile.name.toLowerCase().endsWith('.xls');
 
-      if (!response.ok) {
-        const text = await response.text();
-        console.error('[Import] parse-supplier-file error:', response.status, text);
-        throw new Error(`Errore edge function: ${response.status}`);
+      let parsedRows: Record<string, string>[] = [];
+      let parsedHeaders: string[] = [];
+
+      if (isCSV) {
+        const text = atob(base64);
+        const lines = text.split(/\r?\n/).filter(l => l.trim());
+        const sep = lines[0]?.includes('\t') ? '\t' : ',';
+        const hdrs = lines[0]?.split(sep).map(h => h.replace(/^"|"$/g, '').trim()) ?? [];
+        parsedHeaders = hdrs;
+        parsedRows = lines.slice(1).map(line => {
+          const vals = line.split(sep).map(v => v.replace(/^"|"$/g, '').trim());
+          const obj: Record<string, string> = {};
+          hdrs.forEach((h, i) => { obj[h] = vals[i] ?? ''; });
+          return obj;
+        });
+        console.log('[Import] Local CSV parse complete — rows:', parsedRows.length, '| headers:', parsedHeaders);
+      } else if (isXLSX) {
+        const XLSX = await import('xlsx');
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const workbook = XLSX.read(bytes, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        parsedHeaders = jsonRows.length > 0 ? Object.keys(jsonRows[0]) : [];
+        parsedRows = jsonRows.map(row => {
+          const obj: Record<string, string> = {};
+          for (const k of Object.keys(row)) obj[k] = String(row[k] ?? '');
+          return obj;
+        });
+        console.log('[Import] Local XLSX parse complete — rows:', parsedRows.length, '| headers:', parsedHeaders);
+      } else {
+        throw new Error('Formato file non supportato. Usa CSV o XLSX.');
       }
 
-      const parsed = await response.json();
-      console.log('[Import] parse-supplier-file response:', {
-        rows: parsed.rows?.length,
-        columns: parsed.column_headers,
-      });
-
-      const format = selectedFile.name.toLowerCase().endsWith('.csv') ? 'csv' : 'xlsx';
+      const format = isCSV ? 'csv' : 'xlsx';
 
       // Save supplier_file with all mapping columns
       const { data: fileData, error: fileError } = await db
@@ -334,7 +373,7 @@ export default function ImportScreen() {
         .insert({
           file_name: selectedFile.name,
           original_format: format,
-          column_headers: parsed.column_headers ?? [],
+          column_headers: parsedHeaders,
           extra_columns: [],
           imported_by: importedBy || null,
           status: 'imported',
@@ -359,8 +398,8 @@ export default function ImportScreen() {
       console.log('[Import] supplier_file created:', fileData.id);
 
       // Save items with normalization
-      const rows: Record<string, string>[] = parsed.rows ?? [];
-      const headers: string[] = parsed.column_headers ?? [];
+      const rows: Record<string, string>[] = parsedRows;
+      const headers: string[] = parsedHeaders;
 
       console.log('[Import] Building normalized items — mappings:', mappings);
 
