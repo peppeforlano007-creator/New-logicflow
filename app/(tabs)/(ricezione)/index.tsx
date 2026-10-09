@@ -275,6 +275,17 @@ export default function RicezioneScreen() {
       const eanList = Array.from(eanMap.values());
       console.log('[Ricezione] loadEanItems found', eanList.length, 'unique EAN values');
       setEanItems(eanList);
+
+      // Bug 1 fix — initialize eanCounts from DB so navigation doesn't reset counters
+      const initialCounts: Record<string, number> = {};
+      for (const { ean, item } of eanList) {
+        const savedQty = (item.extra_data as any)?.ean_received_qty;
+        if (savedQty != null) {
+          initialCounts[ean] = Number(savedQty) || 0;
+        }
+      }
+      console.log('[Ricezione] loadEanItems initialCounts from DB:', Object.keys(initialCounts).length, 'entries');
+      setEanCounts(initialCounts);
     } catch (err) {
       console.error('[Ricezione] loadEanItems exception:', err);
     } finally {
@@ -337,33 +348,41 @@ export default function RicezioneScreen() {
         if (selectedColumn === 'EAN') {
           console.log('[Ricezione] EAN mode — searching for EAN/barcode:', trimmed);
 
-          // Find item with matching EAN/barcode in original_data
-          const { data: rawItems, error: searchError } = await db
-            .from('supplier_items')
-            .select('id, file_id, item_code, original_data, extra_data, status, quantita, quantita_disponibile')
-            .in('file_id', activeFileIds);
-
-          if (searchError) {
-            console.error('[Ricezione] EAN search error:', searchError);
-            throw searchError;
-          }
-
-          const allItems = (rawItems ?? []) as (SupplierItem & { quantita?: number })[];
+          // Bug 2 fix — search eanItems in-memory instead of re-querying DB on every scan
           let matchedItem: (SupplierItem & { quantita?: number }) | null = null;
 
-          for (const item of allItems) {
-            const od = item.original_data as Record<string, unknown> | null | undefined;
-            if (!od) continue;
-            for (const key of Object.keys(od)) {
-              const lk = key.toLowerCase();
-              if (lk === 'ean' || lk.includes('ean') || lk === 'barcode' || lk.includes('barcode')) {
-                if (String(od[key] ?? '').trim() === trimmed) {
-                  matchedItem = item;
-                  break;
+          if (eanItems.length > 0) {
+            console.log('[Ricezione] EAN mode — searching in-memory eanItems:', eanItems.length, 'entries');
+            const eanEntry = eanItems.find(e => e.ean === trimmed);
+            matchedItem = eanEntry?.item ?? null;
+          } else {
+            // Fallback: eanItems not yet loaded, query DB directly
+            console.log('[Ricezione] EAN mode — eanItems empty, falling back to DB query');
+            const { data: rawItems, error: searchError } = await db
+              .from('supplier_items')
+              .select('id, file_id, item_code, original_data, extra_data, status, quantita, quantita_disponibile')
+              .in('file_id', activeFileIds);
+
+            if (searchError) {
+              console.error('[Ricezione] EAN search error:', searchError);
+              throw searchError;
+            }
+
+            const allItems = (rawItems ?? []) as (SupplierItem & { quantita?: number })[];
+            for (const item of allItems) {
+              const od = item.original_data as Record<string, unknown> | null | undefined;
+              if (!od) continue;
+              for (const key of Object.keys(od)) {
+                const lk = key.toLowerCase();
+                if (lk === 'ean' || lk.includes('ean') || lk === 'barcode' || lk.includes('barcode')) {
+                  if (String(od[key] ?? '').trim() === trimmed) {
+                    matchedItem = item;
+                    break;
+                  }
                 }
               }
+              if (matchedItem) break;
             }
-            if (matchedItem) break;
           }
 
           const logId = `${Date.now()}-${Math.random()}`;
@@ -403,14 +422,18 @@ export default function RicezioneScreen() {
           setEanCounts(prev => ({ ...prev, [trimmed]: newCount }));
 
           const isNowComplete = newCount >= quantita;
+          // Bug 3 fix — set status 'processing' and received:'true' on first scan, not only when complete
+          const isFirstScan = newCount === 1;
           const updatePayload: Record<string, unknown> = {
             extra_data: {
               ...(matchedItem.extra_data as Record<string, unknown> ?? {}),
               ean_received_qty: newCount,
-              ...(isNowComplete ? { received: 'true', received_at: now } : {}),
+              ...(isFirstScan || isNowComplete ? { received: 'true', received_at: now } : {}),
             },
-            ...(isNowComplete ? { status: 'processing' } : {}),
+            ...(isFirstScan || isNowComplete ? { status: 'processing' } : {}),
           };
+
+          console.log('[Ricezione] EAN update payload — isFirstScan:', isFirstScan, '| isNowComplete:', isNowComplete);
 
           const { error: updateErr } = await db
             .from('supplier_items')
@@ -420,10 +443,10 @@ export default function RicezioneScreen() {
           if (updateErr) {
             console.error('[Ricezione] EAN item update error:', updateErr);
           } else {
-            console.log('[Ricezione] EAN item updated in DB:', matchedItem.id, '| newCount:', newCount, '| complete:', isNowComplete);
+            console.log('[Ricezione] EAN item updated in DB:', matchedItem.id, '| newCount:', newCount, '| complete:', isNowComplete, '| firstScan:', isFirstScan);
           }
 
-          if (isNowComplete) {
+          if (isFirstScan) {
             setReceivedItems(prev => prev + 1);
           }
 
@@ -607,7 +630,7 @@ export default function RicezioneScreen() {
         setTimeout(() => inputRef.current?.focus(), 100);
       }
     },
-    [activeFiles, processingCode, selectedColumn, eanCounts, showToast, showErrorBanner, showWarningBanner],
+    [activeFiles, eanItems, processingCode, selectedColumn, eanCounts, showToast, showErrorBanner, showWarningBanner],
   );
 
   const handleScanned = useCallback(
