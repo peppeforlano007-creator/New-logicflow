@@ -31,6 +31,13 @@ interface SessionLogEntry {
   timestamp: Date;
   quantita_totale?: number;
   quantita_disponibile?: number;
+  eanInfo?: string;
+}
+
+interface EanItem {
+  ean: string;
+  item: SupplierItem & { quantita?: number };
+  totalQty: number;
 }
 
 // ─── Session Log Row ──────────────────────────────────────────────────────────
@@ -82,12 +89,38 @@ function SessionLogRow({ entry }: { entry: SessionLogEntry }) {
             Qtà: {qtaDisp} disponibili su {qtaTot} totali
           </Text>
         )}
+        {entry.eanInfo ? (
+          <Text style={[styles.logMeta, { color: '#16A34A' }]}>{entry.eanInfo}</Text>
+        ) : null}
         {entry.found && fileNamesStr ? <Text style={styles.logFileName} numberOfLines={1}>{fileNamesStr}</Text> : null}
         {bottomText}
       </View>
       <View style={styles.logTimestamp}>
         <Clock size={11} color={COLORS.textTertiary} />
         <Text style={styles.logTime}>{timeStr}</Text>
+      </View>
+    </View>
+  );
+}
+
+// ─── EAN Item Row ─────────────────────────────────────────────────────────────
+
+function EanItemRow({ ean, totalQty, received }: { ean: string; totalQty: number; received: number }) {
+  const isComplete = received >= totalQty;
+  const isPartial = received > 0 && received < totalQty;
+
+  const bgColor = isComplete ? '#DCFCE7' : isPartial ? '#FFF7ED' : COLORS.surfaceSecondary;
+  const borderColor = isComplete ? '#BBF7D0' : isPartial ? '#FED7AA' : COLORS.border;
+  const textColor = isComplete ? '#15803D' : isPartial ? '#D97706' : COLORS.textSecondary;
+
+  const statusText = isComplete ? '✓' : `${received}/${totalQty}`;
+  const statusBg = isComplete ? '#16A34A' : isPartial ? '#D97706' : '#9CA3AF';
+
+  return (
+    <View style={[styles.eanItemRow, { backgroundColor: bgColor, borderColor }]}>
+      <Text style={[styles.eanItemCode, { color: textColor }]} numberOfLines={1}>{ean}</Text>
+      <View style={[styles.eanItemBadge, { backgroundColor: statusBg }]}>
+        <Text style={styles.eanItemBadgeText}>{statusText}</Text>
       </View>
     </View>
   );
@@ -108,7 +141,10 @@ export default function RicezioneScreen() {
   const [sessionLog, setSessionLog] = useState<SessionLogEntry[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [bannerType, setBannerType] = useState<'error' | 'warning'>('error');
-  const [selectedColumn, setSelectedColumn] = useState<'PkgID' | 'LPN'>('LPN');
+  const [selectedColumn, setSelectedColumn] = useState<'PkgID' | 'LPN' | 'EAN'>('LPN');
+  const [eanCounts, setEanCounts] = useState<Record<string, number>>({});
+  const [eanItems, setEanItems] = useState<EanItem[]>([]);
+  const [loadingEan, setLoadingEan] = useState(false);
   const errorBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bannerOpacity = useRef(new Animated.Value(0)).current;
   const inputRef = useRef<TextInput>(null);
@@ -193,6 +229,65 @@ export default function RicezioneScreen() {
     return () => clearTimeout(t);
   }, []);
 
+  // ── Load EAN items when EAN mode is selected ───────────────────────────────
+
+  const loadEanItems = useCallback(async (files: SupplierFile[]) => {
+    if (files.length === 0) return;
+    console.log('[Ricezione] loadEanItems called for', files.length, 'files');
+    setLoadingEan(true);
+    try {
+      const fileIds = files.map(f => f.id);
+      const { data: rawItems, error } = await db
+        .from('supplier_items')
+        .select('id, file_id, item_code, original_data, extra_data, status, quantita, quantita_disponibile')
+        .in('file_id', fileIds);
+
+      if (error) {
+        console.error('[Ricezione] loadEanItems error:', error);
+        return;
+      }
+
+      const items = (rawItems ?? []) as (SupplierItem & { quantita?: number })[];
+      console.log('[Ricezione] loadEanItems raw items:', items.length);
+
+      // Find items that have an EAN/barcode key in original_data
+      const eanMap = new Map<string, EanItem>();
+      for (const item of items) {
+        const od = item.original_data as Record<string, unknown> | null | undefined;
+        if (!od) continue;
+        let eanValue: string | null = null;
+        for (const key of Object.keys(od)) {
+          const lk = key.toLowerCase();
+          if (lk === 'ean' || lk.includes('ean') || lk === 'barcode' || lk.includes('barcode')) {
+            const val = od[key];
+            if (val && String(val).trim()) {
+              eanValue = String(val).trim();
+              break;
+            }
+          }
+        }
+        if (!eanValue) continue;
+        if (!eanMap.has(eanValue)) {
+          eanMap.set(eanValue, { ean: eanValue, item, totalQty: item.quantita ?? 1 });
+        }
+      }
+
+      const eanList = Array.from(eanMap.values());
+      console.log('[Ricezione] loadEanItems found', eanList.length, 'unique EAN values');
+      setEanItems(eanList);
+    } catch (err) {
+      console.error('[Ricezione] loadEanItems exception:', err);
+    } finally {
+      setLoadingEan(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedColumn === 'EAN' && activeFiles.length > 0) {
+      loadEanItems(activeFiles);
+    }
+  }, [selectedColumn, activeFiles, loadEanItems]);
+
   // ── Error banner ───────────────────────────────────────────────────────────
 
   const showErrorBanner = useCallback((msg: string) => {
@@ -238,8 +333,124 @@ export default function RicezioneScreen() {
           return;
         }
 
-        // Query DB directly for matching items — include quantita fields
-        // Search across standard keys: item_code, LPN, ASIN, PkgID, and extra_data SKU
+        // ── EAN mode ──────────────────────────────────────────────────────────
+        if (selectedColumn === 'EAN') {
+          console.log('[Ricezione] EAN mode — searching for EAN/barcode:', trimmed);
+
+          // Find item with matching EAN/barcode in original_data
+          const { data: rawItems, error: searchError } = await db
+            .from('supplier_items')
+            .select('id, file_id, item_code, original_data, extra_data, status, quantita, quantita_disponibile')
+            .in('file_id', activeFileIds);
+
+          if (searchError) {
+            console.error('[Ricezione] EAN search error:', searchError);
+            throw searchError;
+          }
+
+          const allItems = (rawItems ?? []) as (SupplierItem & { quantita?: number })[];
+          let matchedItem: (SupplierItem & { quantita?: number }) | null = null;
+
+          for (const item of allItems) {
+            const od = item.original_data as Record<string, unknown> | null | undefined;
+            if (!od) continue;
+            for (const key of Object.keys(od)) {
+              const lk = key.toLowerCase();
+              if (lk === 'ean' || lk.includes('ean') || lk === 'barcode' || lk.includes('barcode')) {
+                if (String(od[key] ?? '').trim() === trimmed) {
+                  matchedItem = item;
+                  break;
+                }
+              }
+            }
+            if (matchedItem) break;
+          }
+
+          const logId = `${Date.now()}-${Math.random()}`;
+          const now = new Date().toISOString();
+
+          if (!matchedItem) {
+            console.log('[Ricezione] EAN not found:', trimmed);
+            setSessionLog(prev => [
+              { id: logId, code: trimmed, found: false, fileNames: [], count: 0, timestamp: new Date() },
+              ...prev.slice(0, 19),
+            ]);
+            showToast(`⚠ EAN non trovato: ${trimmed}`, 'error');
+            showErrorBanner(`EAN non trovato: ${trimmed}`);
+            return;
+          }
+
+          const quantita = matchedItem.quantita ?? 1;
+          const currentCount = eanCounts[trimmed] ?? 0;
+
+          console.log('[Ricezione] EAN found — quantita:', quantita, '| currentCount:', currentCount);
+
+          if (currentCount >= quantita) {
+            const msg = `Quantità massima raggiunta: ${trimmed} (${quantita}/${quantita})`;
+            console.log('[Ricezione] EAN max qty reached:', msg);
+            showErrorBanner(msg);
+            showToast(msg, 'error');
+            setSessionLog(prev => [
+              { id: logId, code: trimmed, found: false, duplicate: true, fileNames: [], count: 0, timestamp: new Date() },
+              ...prev.slice(0, 19),
+            ]);
+            return;
+          }
+
+          const newCount = currentCount + 1;
+          console.log('[Ricezione] EAN incrementing count:', currentCount, '->', newCount, '/', quantita);
+
+          setEanCounts(prev => ({ ...prev, [trimmed]: newCount }));
+
+          const isNowComplete = newCount >= quantita;
+          const updatePayload: Record<string, unknown> = {
+            extra_data: {
+              ...(matchedItem.extra_data as Record<string, unknown> ?? {}),
+              ean_received_qty: newCount,
+              ...(isNowComplete ? { received: 'true', received_at: now } : {}),
+            },
+            ...(isNowComplete ? { status: 'processing' } : {}),
+          };
+
+          const { error: updateErr } = await db
+            .from('supplier_items')
+            .update(updatePayload)
+            .eq('id', matchedItem.id);
+
+          if (updateErr) {
+            console.error('[Ricezione] EAN item update error:', updateErr);
+          } else {
+            console.log('[Ricezione] EAN item updated in DB:', matchedItem.id, '| newCount:', newCount, '| complete:', isNowComplete);
+          }
+
+          if (isNowComplete) {
+            setReceivedItems(prev => prev + 1);
+          }
+
+          const eanInfo = `${newCount}/${quantita} unità ricevute`;
+          const activeFileMap = new Map<string, SupplierFile>(activeFiles.map(f => [f.id, f]));
+          const file = activeFileMap.get(matchedItem.file_id);
+          const fileNames = file ? [file.file_name] : [];
+
+          setSessionLog(prev => [
+            {
+              id: logId,
+              code: trimmed,
+              found: true,
+              fileNames,
+              count: 1,
+              timestamp: new Date(),
+              eanInfo,
+            },
+            ...prev.slice(0, 19),
+          ]);
+
+          showToast(`EAN ${trimmed} — ${eanInfo}`, 'success');
+          console.log('[Ricezione] EAN processCode success:', { code: trimmed, newCount, quantita, isNowComplete });
+          return;
+        }
+
+        // ── PkgID / LPN mode ──────────────────────────────────────────────────
         console.log('[Ricezione] Querying DB for code:', trimmed, '| column:', selectedColumn, '| fileIds:', activeFileIds.length);
         const { data: matchedRaw, error: searchError } = await db
           .from('supplier_items')
@@ -396,7 +607,7 @@ export default function RicezioneScreen() {
         setTimeout(() => inputRef.current?.focus(), 100);
       }
     },
-    [activeFiles, processingCode, selectedColumn, showToast, showErrorBanner, showWarningBanner],
+    [activeFiles, processingCode, selectedColumn, eanCounts, showToast, showErrorBanner, showWarningBanner],
   );
 
   const handleScanned = useCallback(
@@ -431,8 +642,12 @@ export default function RicezioneScreen() {
     setTimeout(() => inputRef.current?.focus(), 50);
   }, [manualCode, processCode]);
 
-  const handleColumnToggle = useCallback((col: 'PkgID' | 'LPN') => {
+  const handleColumnToggle = useCallback((col: 'PkgID' | 'LPN' | 'EAN') => {
     console.log('[Ricezione] Column toggle pressed:', col);
+    if (col !== 'EAN') {
+      setEanCounts({});
+      console.log('[Ricezione] EAN counts reset (switched away from EAN mode)');
+    }
     setSelectedColumn(col);
   }, []);
 
@@ -440,8 +655,16 @@ export default function RicezioneScreen() {
 
   const progressRatio = totalItems > 0 ? receivedItems / totalItems : 0;
   const progressPercent = Math.round(progressRatio * 100);
-  const progressLabel = `${receivedItems} articoli ricevuti su ${totalItems} totali`;
   const hasActiveFiles = activeFiles.length > 0;
+
+  // EAN progress
+  const eanTotalUnits = eanItems.reduce((sum, ei) => sum + ei.totalQty, 0);
+  const eanScannedUnits = Object.values(eanCounts).reduce((sum, v) => sum + v, 0);
+  const eanProgressLabel = `${eanScannedUnits} / ${eanTotalUnits} unità scansionate`;
+
+  const progressLabel = selectedColumn === 'EAN'
+    ? eanProgressLabel
+    : `${receivedItems} articoli ricevuti su ${totalItems} totali`;
 
   const scanButtonSubtext = `Cerca per: ${selectedColumn}`;
 
@@ -501,6 +724,15 @@ export default function RicezioneScreen() {
               >
                 <Text style={[styles.columnToggleText, selectedColumn === 'LPN' && styles.columnToggleTextActive]}>
                   LPN
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.columnToggleBtn, selectedColumn === 'EAN' && styles.columnToggleBtnActive]}
+                onPress={() => handleColumnToggle('EAN')}
+                activeOpacity={0.75}
+              >
+                <Text style={[styles.columnToggleText, selectedColumn === 'EAN' && styles.columnToggleTextActive]}>
+                  EAN
                 </Text>
               </TouchableOpacity>
             </View>
@@ -564,6 +796,29 @@ export default function RicezioneScreen() {
               <Text style={styles.manualSearchBtnText}>Cerca</Text>
             </TouchableOpacity>
           </View>
+
+          {/* EAN items list */}
+          {selectedColumn === 'EAN' && (
+            <View style={{ gap: 8 }}>
+              <Text style={styles.sectionTitle}>Articoli EAN nei file attivi</Text>
+              {loadingEan ? (
+                <ActivityIndicator color={COLORS.primary} size="small" style={{ marginVertical: 12 }} />
+              ) : eanItems.length === 0 ? (
+                <View style={styles.eanEmptyState}>
+                  <Text style={styles.eanEmptyText}>Nessun articolo con EAN trovato nei file attivi</Text>
+                </View>
+              ) : (
+                eanItems.map(ei => (
+                  <EanItemRow
+                    key={ei.ean}
+                    ean={ei.ean}
+                    totalQty={ei.totalQty}
+                    received={eanCounts[ei.ean] ?? 0}
+                  />
+                ))
+              )}
+            </View>
+          )}
 
           {/* Session log */}
           {sessionLog.length > 0 ? (
@@ -819,6 +1074,44 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+
+  // EAN item row
+  eanItemRow: {
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+  },
+  eanItemCode: {
+    fontSize: 14,
+    fontWeight: '600',
+    flex: 1,
+    marginRight: 8,
+  },
+  eanItemBadge: {
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    minWidth: 36,
+    alignItems: 'center',
+  },
+  eanItemBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  eanEmptyState: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  eanEmptyText: {
+    fontSize: 13,
+    color: COLORS.textTertiary,
+    textAlign: 'center',
   },
 
   // Log rows
