@@ -123,20 +123,40 @@ export default function ScaricaScreen() {
 
       const { data: articoli, error: artErr } = await db
         .from('supplier_items')
-        .select('id, item_code, original_data, extra_data, lotto_id')
-        .in('lotto_id', lottiIds);
+        .select('id, item_code, original_data, extra_data, lotto_id, quantita_disponibile, quantita')
+        .in('lotto_id', lottiIds)
+        .gt('quantita_disponibile', 0);
 
       if (artErr) {
         console.error('[Scarico] fetchStoreArticoli articoli error:', artErr);
         return;
       }
 
-      const mapped: StoreArticolo[] = (articoli ?? []).map((a: {
+      // Also include multi-unit cross-store articles
+      const directIds = new Set((articoli ?? []).map((a: any) => a.id));
+      const { data: multiItems } = await db
+        .from('supplier_items')
+        .select('id, item_code, original_data, extra_data, lotto_id, quantita_disponibile, quantita')
+        .gt('quantita', 1)
+        .gt('quantita_disponibile', 0);
+
+      const crossStoreItems = (multiItems ?? []).filter((item: any) => {
+        if (directIds.has(item.id)) return false;
+        const units: any[] = Array.isArray(item.extra_data?.units) ? item.extra_data.units : [];
+        return units.some((u: any) => u?.LottoId && lottiIds.includes(u.LottoId));
+      });
+
+      const allArticoli = [...(articoli ?? []), ...crossStoreItems];
+      console.log('[Scarico] articoli diretti:', (articoli ?? []).length, '| cross-store:', crossStoreItems.length);
+
+      const mapped: StoreArticolo[] = allArticoli.map((a: {
         id: string;
         item_code: string;
         original_data: Record<string, unknown> | null;
         extra_data: Record<string, unknown> | null;
         lotto_id: string;
+        quantita_disponibile: number | null;
+        quantita: number | null;
       }) => {
         const od = a.original_data ?? {};
         const identifier =
@@ -159,13 +179,20 @@ export default function ScaricaScreen() {
           }
         }
 
+        // Determine display lotto — prefer the one in this store
+        let displayLottoId = a.lotto_id;
+        if (!lottiIds.includes(displayLottoId)) {
+          const unitInStore = units.find((u: any) => u?.LottoId && lottiIds.includes(u.LottoId));
+          if (unitInStore?.LottoId) displayLottoId = unitInStore.LottoId;
+        }
+
         return {
           id: a.id,
           item_code: a.item_code,
           identifier,
           desc,
-          codice_lotto: lottoMap[a.lotto_id] ?? '—',
-          lotto_id: a.lotto_id,
+          codice_lotto: lottoMap[displayLottoId] ?? '—',
+          lotto_id: displayLottoId,
           skus,
         };
       });

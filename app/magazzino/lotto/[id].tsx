@@ -250,7 +250,7 @@ export default function DettaglioLottoScreen() {
       ? units.filter((u: any) => u?.LottoId === lotto?.id).length || 1
       : qtaTot;
     const showQtyBadge = qtaPerLotto > 1 || (qtaTot > 1 && units.length === 0);
-    const isEsaurito = qtaDisp === 0 && qtaTot > 0;
+    const isEsaurito = lotto?.stato === 'caricato' && qtaDisp === 0 && qtaTot > 0;
 
     return (
       <AnimatedListItem index={index}>
