@@ -342,7 +342,7 @@ export default function ImportScreen() {
             }
           }
         } catch (localErr) {
-          console.warn('[Import] Local header extraction failed:', localErr);
+          console.error('[Import] Local header extraction failed:', localErr);
         }
 
         console.log('[Import] Calling parse-supplier-file for preview (authoritative overwrite)');

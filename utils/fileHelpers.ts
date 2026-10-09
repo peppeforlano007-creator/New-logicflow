@@ -25,8 +25,25 @@ export async function readFileAsBase64(uri: string): Promise<string> {
       console.log('[fileHelpers] readFileAsBase64 (web data-URL) extracted base64, length:', base64.length);
       return base64;
     }
-    console.log('[fileHelpers] readFileAsBase64 (web) uri has no comma, returning as-is');
-    return uri;
+    // Generic fallback: fetch the URI and convert to base64
+    // This handles http:, https:, file:, and any opaque URI from DocumentPicker on web
+    console.log('[fileHelpers] readFileAsBase64 (web) generic fetch fallback for URI type');
+    try {
+      const response = await fetch(uri);
+      if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+      console.log('[fileHelpers] readFileAsBase64 (web generic fetch) complete, length:', base64.length);
+      return base64;
+    } catch (fetchErr) {
+      console.error('[fileHelpers] readFileAsBase64 (web) all strategies failed:', fetchErr);
+      throw new Error('Impossibile leggere il file. Prova a riaprire il file picker.');
+    }
   }
   const base64 = await FileSystem.readAsStringAsync(uri, {
     encoding: FileSystem.EncodingType.Base64,
