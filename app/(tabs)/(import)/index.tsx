@@ -64,7 +64,7 @@ const MAPPING_FIELDS = [
   { key: 'lpn',          label: 'LPN',           required: true,  color: '#2563EB', desc: 'Codice univoco per riga — usato per scansione in ricezione e ricerca in cassa' },
   { key: 'asin',         label: 'ASIN',          required: false, color: '#7C3AED', desc: 'Raggruppamento articoli con stessa identità — usato in lavorazione' },
   { key: 'pkgid',        label: 'PkgID',         required: false, color: '#0891B2', desc: 'Codice collo per ricezione multipla (opzionale)' },
-  { key: 'amazonprice',  label: 'Amazon Price',  required: true,  color: '#D97706', desc: 'Prezzo Amazon — calcola automaticamente il prezzo A (−35%), B (−50%), C (−70%) in lavorazione' },
+  { key: 'amazonprice',  label: 'Amazon Price',  required: false, color: '#D97706', desc: 'Prezzo Amazon — calcola automaticamente il prezzo A (−35%), B (−50%), C (−70%) in lavorazione' },
   { key: 'descrizione',  label: 'Descrizione',   required: false, color: '#059669', desc: 'Titolo/descrizione articolo — mostrato in lavorazione e nella ricerca cassa' },
   { key: 'adjreason',    label: 'AdjReason',     required: false, color: '#DC2626', desc: 'Motivo anomalia — usato nell\'export per articoli non ricevuti' },
   { key: 'quantita',     label: 'Quantità',      required: false, color: '#6B7280', desc: 'Numero di unità per riga — lascia vuoto se ogni riga è 1 articolo' },
