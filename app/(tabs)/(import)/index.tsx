@@ -24,6 +24,21 @@ import { readFileAsBase64 } from '@/utils/fileHelpers';
 import { SUPABASE_PROJECT_URL as SUPABASE_URL, SUPABASE_ANON_TOKEN as SUPABASE_ANON_KEY } from '@/constants/supabase';
 import type { SupplierFile } from '@/types';
 
+// ─── Base64 helpers ───────────────────────────────────────────────────────────
+
+function stripBase64Prefix(b64: string): string {
+  const idx = b64.indexOf(',');
+  return idx !== -1 ? b64.slice(idx + 1) : b64;
+}
+
+function base64ToUint8Array(b64: string): Uint8Array {
+  const raw = stripBase64Prefix(b64);
+  const binary = atob(raw);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 // ─── Mapping field definitions ────────────────────────────────────────────────
 
 const MAPPING_FIELDS = [
@@ -240,7 +255,7 @@ export default function ImportScreen() {
           const isXLSX = asset.name.toLowerCase().endsWith('.xlsx') || asset.name.toLowerCase().endsWith('.xls');
 
           if (isCSV) {
-            const text = atob(base64);
+            const text = atob(stripBase64Prefix(base64));
             const firstLine = text.split(/\r?\n/)[0] ?? '';
             // Handle tab-separated too
             const sep = firstLine.includes('\t') ? '\t' : ',';
@@ -251,9 +266,7 @@ export default function ImportScreen() {
             }
           } else if (isXLSX) {
             const XLSX = await import('xlsx');
-            const binary = atob(base64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            const bytes = base64ToUint8Array(base64);
             const workbook = XLSX.read(bytes, { type: 'array' });
             const sheetName = workbook.SheetNames[0];
             const sheet = workbook.Sheets[sheetName];
@@ -278,14 +291,18 @@ export default function ImportScreen() {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
           },
-          body: JSON.stringify({ file_base64: base64, file_name: asset.name, preview_only: true }),
+          body: JSON.stringify({ file_base64: stripBase64Prefix(base64), file_name: asset.name, preview_only: true }),
         });
 
         if (response.ok) {
           const data = await response.json();
           console.log('[Import] Preview data:', data);
-          setPreviewRows(data.row_count ?? 0);
-          setPreviewCols(data.column_headers ?? []);
+          if (data.row_count != null && data.row_count > 0) {
+            setPreviewRows(data.row_count);
+          }
+          if (data.column_headers && data.column_headers.length > 0) {
+            setPreviewCols(data.column_headers);
+          }
         } else {
           const text = await response.text();
           console.warn('[Import] Preview response not ok:', response.status, text);
@@ -333,7 +350,7 @@ export default function ImportScreen() {
       let parsedHeaders: string[] = [];
 
       if (isCSV) {
-        const text = atob(base64);
+        const text = atob(stripBase64Prefix(base64));
         const lines = text.split(/\r?\n/).filter(l => l.trim());
         const sep = lines[0]?.includes('\t') ? '\t' : ',';
         const hdrs = lines[0]?.split(sep).map(h => h.replace(/^"|"$/g, '').trim()) ?? [];
@@ -347,9 +364,7 @@ export default function ImportScreen() {
         console.log('[Import] Local CSV parse complete — rows:', parsedRows.length, '| headers:', parsedHeaders);
       } else if (isXLSX) {
         const XLSX = await import('xlsx');
-        const binary = atob(base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const bytes = base64ToUint8Array(base64);
         const workbook = XLSX.read(bytes, { type: 'array' });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
@@ -984,10 +999,13 @@ export default function ImportScreen() {
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
             {/* Loading state when columns not yet available */}
             {previewCols.length === 0 && (
-              <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+              <View style={{ alignItems: 'center', paddingVertical: 32, gap: 12 }}>
                 <ActivityIndicator color={COLORS.primary} />
-                <Text style={{ marginTop: 12, color: COLORS.textSecondary, fontSize: 14 }}>
-                  Caricamento colonne...
+                <Text style={{ color: COLORS.textSecondary, fontSize: 14, textAlign: 'center' }}>
+                  Lettura colonne in corso...
+                </Text>
+                <Text style={{ color: COLORS.textTertiary, fontSize: 12, textAlign: 'center', paddingHorizontal: 24 }}>
+                  Se il caricamento non termina, chiudi e riprova con un file CSV o XLSX.
                 </Text>
               </View>
             )}
