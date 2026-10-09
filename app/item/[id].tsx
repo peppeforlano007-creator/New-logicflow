@@ -12,7 +12,7 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { CheckCircle, Clock, Camera, ChevronDown, ChevronUp, Search, X } from 'lucide-react-native';
+import { CheckCircle, Clock, Camera, ChevronDown, ChevronUp, Search, X, Pencil } from 'lucide-react-native';
 import * as WebBrowser from 'expo-web-browser';
 import { ScannerModal } from '@/components/ScannerModal';
 import { COLORS } from '@/constants/AppColors';
@@ -184,6 +184,7 @@ export default function ItemDetailScreen() {
   const [totalUnits, setTotalUnits] = useState(1);
   const [currentUnitIndex, setCurrentUnitIndex] = useState(1);
   const [processedUnits, setProcessedUnits] = useState<UnitData[]>([]);
+  const [editingUnitIndex, setEditingUnitIndex] = useState<number | null>(null);
 
   // Track whether we've mounted so the selezione effect doesn't overwrite a restored price
   const isMounted = useRef(false);
@@ -467,6 +468,50 @@ export default function ItemDetailScreen() {
           return;
         }
 
+        // If editing an existing unit, update it in place
+        if (editingUnitIndex !== null) {
+          console.log('[ItemDetail] handleSave — updating unit in place, editingUnitIndex:', editingUnitIndex);
+          const updatedUnits = processedUnits.map(u => {
+            if (u.unitIndex !== editingUnitIndex) return u;
+            return {
+              ...u,
+              AdjReason: selectedCondition ?? u.AdjReason,
+              Selezione: selezione ?? u.Selezione,
+              PrezzoVendita: prezzoVendita || u.PrezzoVendita,
+              SKU: skuVendita || u.SKU,
+              EANCorretto: eanCorretto || u.EANCorretto,
+              ASINCorretto: asinCorretto || u.ASINCorretto,
+              Lotto: selectedLotto?.codice_lotto ?? u.Lotto,
+              LottoId: selectedLottoId ?? u.LottoId,
+            };
+          });
+          setProcessedUnits(updatedUnits);
+
+          const updatedExtraDataEdit = {
+            ...extraData,
+            units: updatedUnits,
+          };
+          const { error: editError } = await db
+            .from('supplier_items')
+            .update({ extra_data: updatedExtraDataEdit })
+            .eq('id', id);
+          if (editError) throw editError;
+
+          setExtraData(updatedExtraDataEdit);
+          setEditingUnitIndex(null);
+          setSelectedCondition(null);
+          setSelezione(null);
+          setPrezzoVendita('');
+          setSkuVendita('');
+          setEanCorretto('');
+          setAsinCorretto('');
+          setSelectedLotto(null);
+          setSelectedLottoId(null);
+          showToast(`Unità #${editingUnitIndex} aggiornata`, 'success');
+          setSaving(false);
+          return;
+        }
+
         // Multi-unit flow
         const unitData: UnitData = {
           unitIndex: currentUnitIndex,
@@ -570,7 +615,7 @@ export default function ItemDetailScreen() {
     } finally {
       setSaving(false);
     }
-  }, [id, originalData, extraData, user, selectedCondition, altroText, selezione, prezzoVendita, skuVendita, selectedLotto, selectedLottoId, eanCorretto, asinCorretto, totalUnits, currentUnitIndex, processedUnits, item, showToast, router]);
+  }, [id, originalData, extraData, user, selectedCondition, altroText, selezione, prezzoVendita, skuVendita, selectedLotto, selectedLottoId, eanCorretto, asinCorretto, totalUnits, currentUnitIndex, processedUnits, editingUnitIndex, item, showToast, router]);
 
   const itemDesc =
     (originalData['Title'] as string | undefined) ??
@@ -606,9 +651,11 @@ export default function ItemDetailScreen() {
 
   const extraColumns = file?.extra_columns ?? [];
   const processedAtDisplay = item?.processed_at ? formatDate(item.processed_at) : null;
-  const saveButtonLabel = totalUnits > 1
-    ? (currentUnitIndex >= totalUnits ? 'Completa lavorazione' : `Salva e prossima unità (${currentUnitIndex}/${totalUnits})`)
-    : 'Salva';
+  const saveButtonLabel = editingUnitIndex !== null
+    ? `Salva modifiche unità #${editingUnitIndex}`
+    : totalUnits > 1
+      ? (currentUnitIndex >= totalUnits ? 'Completa lavorazione' : `Salva e prossima unità (${currentUnitIndex}/${totalUnits})`)
+      : 'Salva';
   const progressPercent = totalUnits > 0 ? (processedUnits.length / totalUnits) * 100 : 0;
   const allUnitsProcessed = processedUnits.length === totalUnits;
 
@@ -668,16 +715,40 @@ export default function ItemDetailScreen() {
                   const unitBgColor = u.Selezione === 'A' ? '#D1FAE5' : u.Selezione === 'B' ? '#DBEAFE' : '#FEF3C7';
                   const unitTextColor = u.Selezione === 'A' ? '#065F46' : u.Selezione === 'B' ? '#1E40AF' : '#92400E';
                   const priceDisplay = u.PrezzoVendita ? `€${u.PrezzoVendita}` : '—';
+                  const isEditing = editingUnitIndex === u.unitIndex;
                   return (
-                    <View key={i} style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 8,
-                      paddingVertical: 4,
-                      paddingHorizontal: 8,
-                      backgroundColor: COLORS.background,
-                      borderRadius: 8,
-                    }}>
+                    <TouchableOpacity
+                      key={i}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        console.log('[ItemDetail] edit unit pressed, unitIndex:', u.unitIndex);
+                        setSelectedCondition(u.AdjReason ?? null);
+                        setSelezione(u.Selezione ?? null);
+                        setPrezzoVendita(u.PrezzoVendita ?? '');
+                        setSkuVendita(u.SKU ?? '');
+                        setEanCorretto(u.EANCorretto ?? '');
+                        setAsinCorretto(u.ASINCorretto ?? '');
+                        if (u.LottoId) {
+                          const matchedLotto = lotti.find(l => l.id === u.LottoId);
+                          if (matchedLotto) {
+                            setSelectedLotto(matchedLotto);
+                            setSelectedLottoId(matchedLotto.id);
+                          }
+                        }
+                        setEditingUnitIndex(u.unitIndex);
+                      }}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 8,
+                        paddingVertical: 4,
+                        paddingHorizontal: 8,
+                        backgroundColor: isEditing ? '#FEF3C7' : COLORS.background,
+                        borderRadius: 8,
+                        borderWidth: isEditing ? 1 : 0,
+                        borderColor: isEditing ? '#F59E0B' : 'transparent',
+                      }}
+                    >
                       <Text style={{ fontSize: 12, color: COLORS.textTertiary, width: 24 }}>#{u.unitIndex}</Text>
                       {u.Selezione ? (
                         <View style={{
@@ -701,7 +772,8 @@ export default function ItemDetailScreen() {
                       <Text style={{ fontSize: 11, color: COLORS.textTertiary }}>
                         {u.processed_by}
                       </Text>
-                    </View>
+                      <Pencil size={13} color={COLORS.textTertiary} />
+                    </TouchableOpacity>
                   );
                 })}
               </View>
@@ -737,6 +809,42 @@ export default function ItemDetailScreen() {
             </Text>
           )}
         </View>
+
+        {/* Editing unit banner */}
+        {editingUnitIndex !== null && (
+          <View style={{
+            backgroundColor: '#FEF3C7',
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: '#F59E0B',
+            padding: 12,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Pencil size={14} color="#92400E" />
+              <Text style={{ fontSize: 13, fontWeight: '600', color: '#92400E' }}>
+                Stai modificando Unità #{editingUnitIndex}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => {
+              console.log('[ItemDetail] cancel edit unit pressed, editingUnitIndex:', editingUnitIndex);
+              setEditingUnitIndex(null);
+              setSelectedCondition(null);
+              setSelezione(null);
+              setPrezzoVendita('');
+              setSkuVendita('');
+              setEanCorretto('');
+              setAsinCorretto('');
+              setSelectedLotto(null);
+              setSelectedLottoId(null);
+            }}>
+              <Text style={{ fontSize: 12, color: '#92400E', fontWeight: '600' }}>Annulla</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Condizione Articolo (AdjReason picker) */}
         <View
