@@ -47,7 +47,7 @@ export default function ProdottiScreen() {
       const { data, error } = await db
         .from('supplier_items')
         .select('*, supplier_files(file_name, extra_columns)')
-        .filter('extra_data->>received', 'eq', 'true')
+        .in('status', ['processing', 'completed'])
         .order('created_at', { ascending: false });
       if (error) { console.error('[Prodotti] fetchItems error:', error); throw error; }
       const nonShortage = ((data as ItemWithFile[]) ?? []).filter(

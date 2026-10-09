@@ -566,6 +566,7 @@ export default function ItemDetailScreen() {
           extra_data: {
             ...updatedExtraData,
             units: newUnits,
+            received: 'true',
             ...(isLastUnit ? {
               Selezione: selezione ?? '',
               PrezzoVendita: prezzoVendita,
