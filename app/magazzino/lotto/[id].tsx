@@ -232,8 +232,15 @@ export default function DettaglioLottoScreen() {
 
   const renderArticolo = useCallback(({ item, index }: { item: LottoArticolo; index: number }) => {
     const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
-    const descKey = Object.keys(item.original_data ?? {}).find(k => k.toLowerCase() === 'itemdesc');
-    const descValue = descKey ? ((item.original_data ?? {})[descKey] || '—') : '—';
+    const od = item.original_data ?? {};
+    const ed2 = (item as any).extra_data ?? {};
+    const descValue =
+      od['Title'] || od['title'] ||
+      od['descrizione'] || od['Descrizione'] ||
+      od['ITEMDESC'] || od['itemdesc'] ||
+      Object.values(od).find(v => typeof v === 'string' && v.length > 5 && !/^\d+$/.test(v)) ||
+      ed2['Title'] || ed2['title'] || ed2['descrizione'] ||
+      '—';
     const isVenduto = item.venduto === true;
     const qtaTot = (item as any).quantita ?? 1;
     const qtaDisp = (item as any).quantita_disponibile ?? 0;
