@@ -84,7 +84,7 @@ function AnimatedListItem({ index, children }: { index: number; children: React.
       Animated.timing(opacity, { toValue: 1, duration: 300, delay: index * 50, useNativeDriver: true }),
       Animated.timing(translateY, { toValue: 0, duration: 300, delay: index * 50, useNativeDriver: true }),
     ]).start();
-  }, [lotto]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
   return <Animated.View style={{ opacity, transform: [{ translateY }] }}>{children}</Animated.View>;
 }
 
@@ -299,7 +299,7 @@ export default function DettaglioLottoScreen() {
         </View>
       </AnimatedListItem>
     );
-  }, []);
+  }, [lotto]);
 
   if (loading) {
     return (
