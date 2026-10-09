@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Platform,
+  Modal,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { BarChart3, ArrowLeft, AlertTriangle, TrendingUp, TrendingDown, Package } from 'lucide-react-native';
@@ -339,30 +340,81 @@ export default function RiconciliazioneScreen() {
             </View>
           </View>
 
-          {(showPickerInizio || Platform.OS === 'ios') && showPickerInizio && (
-            <DateTimePicker
-              value={dataInizio}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'inline' : 'default'}
-              onChange={(_, d) => {
-                setShowPickerInizio(false);
-                if (d) { console.log('[Riconciliazione] dataInizio changed:', d.toISOString()); setDataInizio(d); }
-              }}
-              maximumDate={dataFine}
-            />
+          {/* Date pickers — iOS inline, Android modal spinner */}
+          {showPickerInizio && (
+            Platform.OS === 'android' ? (
+              <Modal transparent animationType="fade">
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
+                  <View style={{ backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, width: '85%' }}>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 12 }}>Data inizio</Text>
+                    <DateTimePicker
+                      value={dataInizio}
+                      mode="date"
+                      display="spinner"
+                      onChange={(_, d) => {
+                        setShowPickerInizio(false);
+                        if (d) { console.log('[Riconciliazione] dataInizio changed:', d.toISOString()); setDataInizio(d); }
+                      }}
+                      maximumDate={dataFine}
+                      style={{ width: '100%' }}
+                    />
+                    <TouchableOpacity onPress={() => { console.log('[Riconciliazione] dataInizio picker cancelled'); setShowPickerInizio(false); }} style={{ marginTop: 8, alignItems: 'center', padding: 10 }}>
+                      <Text style={{ color: COLORS.primary, fontWeight: '600' }}>Annulla</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Modal>
+            ) : (
+              <DateTimePicker
+                value={dataInizio}
+                mode="date"
+                display="inline"
+                onChange={(_, d) => {
+                  setShowPickerInizio(false);
+                  if (d) { console.log('[Riconciliazione] dataInizio changed:', d.toISOString()); setDataInizio(d); }
+                }}
+                maximumDate={dataFine}
+              />
+            )
           )}
-          {(showPickerFine || Platform.OS === 'ios') && showPickerFine && (
-            <DateTimePicker
-              value={dataFine}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'inline' : 'default'}
-              onChange={(_, d) => {
-                setShowPickerFine(false);
-                if (d) { console.log('[Riconciliazione] dataFine changed:', d.toISOString()); setDataFine(d); }
-              }}
-              minimumDate={dataInizio}
-              maximumDate={today}
-            />
+
+          {showPickerFine && (
+            Platform.OS === 'android' ? (
+              <Modal transparent animationType="fade">
+                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
+                  <View style={{ backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, width: '85%' }}>
+                    <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 12 }}>Data fine</Text>
+                    <DateTimePicker
+                      value={dataFine}
+                      mode="date"
+                      display="spinner"
+                      onChange={(_, d) => {
+                        setShowPickerFine(false);
+                        if (d) { console.log('[Riconciliazione] dataFine changed:', d.toISOString()); setDataFine(d); }
+                      }}
+                      minimumDate={dataInizio}
+                      maximumDate={today}
+                      style={{ width: '100%' }}
+                    />
+                    <TouchableOpacity onPress={() => { console.log('[Riconciliazione] dataFine picker cancelled'); setShowPickerFine(false); }} style={{ marginTop: 8, alignItems: 'center', padding: 10 }}>
+                      <Text style={{ color: COLORS.primary, fontWeight: '600' }}>Annulla</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </Modal>
+            ) : (
+              <DateTimePicker
+                value={dataFine}
+                mode="date"
+                display="inline"
+                onChange={(_, d) => {
+                  setShowPickerFine(false);
+                  if (d) { console.log('[Riconciliazione] dataFine changed:', d.toISOString()); setDataFine(d); }
+                }}
+                minimumDate={dataInizio}
+                maximumDate={today}
+              />
+            )
           )}
 
           <AnimatedPressable onPress={handleCalcola} style={{ marginTop: 16, opacity: loading || !selectedStore ? 0.6 : 1 }}>
