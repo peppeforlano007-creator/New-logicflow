@@ -174,40 +174,83 @@ export default function CassaScreen() {
         .eq('store_id', storeId)
         .eq('stato', 'caricato');
 
-      const lottiIds = (lottiData ?? []).map((l: { id: string }) => l.id);
+      const lottiIds = (lottiData ?? []).map((l: any) => l.id);
       if (lottiIds.length === 0) { setSfogliaItems([]); return; }
 
       const lottiMap: Record<string, string> = {};
-      (lottiData ?? []).forEach((l: { id: string; codice_lotto: string }) => { lottiMap[l.id] = l.codice_lotto; });
+      (lottiData ?? []).forEach((l: any) => { lottiMap[l.id] = l.codice_lotto; });
 
-      const { data: items } = await db
+      // Primary: items directly assigned to this store's lotti
+      const { data: directItems } = await db
         .from('supplier_items')
-        .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
+        .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile, quantita')
         .in('lotto_id', lottiIds);
 
-      console.log('[Cassa] sfoglia raw items loaded:', items?.length ?? 0);
+      console.log('[Cassa] sfoglia direct items loaded:', directItems?.length ?? 0);
 
-      const result: SfogliaItem[] = ((items ?? []) as {
-        id: string;
-        item_code: string;
-        original_data: Record<string, string>;
-        extra_data: Record<string, unknown>;
-        lotto_id: string | null;
-        status: string;
-        quantita_disponibile: number | null;
-      }[])
-        .filter(item => (item.quantita_disponibile ?? 1) > 0)
-        .map(item => {
+      // Secondary: multi-unit items whose units[] reference one of this store's lotti (cross-store)
+      const directIds = new Set((directItems ?? []).map((i: any) => i.id));
+
+      const { data: multiItems } = await db
+        .from('supplier_items')
+        .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile, quantita')
+        .gt('quantita', 1);
+
+      const crossStoreItems = (multiItems ?? []).filter((item: any) => {
+        if (directIds.has(item.id)) return false;
+        const units: any[] = Array.isArray(item.extra_data?.units) ? item.extra_data.units : [];
+        return units.some((u: any) => u?.LottoId && lottiIds.includes(u.LottoId));
+      });
+
+      console.log('[Cassa] sfoglia cross-store items found:', crossStoreItems.length);
+
+      const allItems = [...(directItems ?? []), ...crossStoreItems];
+
+      const result: SfogliaItem[] = allItems
+        .map((item: any) => {
+          const units: any[] = Array.isArray(item.extra_data?.units) ? item.extra_data.units : [];
+
+          // Compute per-store available quantity
+          let qtaPerStore: number;
+          if (units.length > 0) {
+            qtaPerStore = units.filter((u: any) => u?.LottoId && lottiIds.includes(u.LottoId)).length;
+          } else {
+            qtaPerStore = item.quantita_disponibile ?? 1;
+          }
+
+          if (qtaPerStore <= 0) return null;
+
+          // Determine which lotto to show (prefer the one in this store)
+          let displayLottoId = item.lotto_id;
+          let displayLottoCodice = item.lotto_id ? (lottiMap[item.lotto_id] ?? '—') : '—';
+          if (!lottiIds.includes(displayLottoId) && units.length > 0) {
+            const unitInStore = units.find((u: any) => u?.LottoId && lottiIds.includes(u.LottoId));
+            if (unitInStore?.LottoId) {
+              displayLottoId = unitInStore.LottoId;
+              displayLottoCodice = lottiMap[unitInStore.LottoId] ?? unitInStore.Lotto ?? '—';
+            }
+          }
+
           const identifier = item.original_data?.['LPN'] ?? item.original_data?.['PkgID'] ?? item.item_code;
           const origData = item.original_data ?? {};
           const legacyDescKey = Object.keys(origData).find((k: string) => k.toLowerCase() === 'itemdesc');
           const desc = origData['Title'] ?? origData['title'] ?? origData['descrizione'] ?? origData['Descrizione'] ?? (legacyDescKey ? (origData[legacyDescKey] || '—') : '—');
           const prezzo = extractPrezzo(item.extra_data ?? {});
-          const lotto_codice = item.lotto_id ? (lottiMap[item.lotto_id] ?? '—') : '—';
-          const qtaDisp = item.quantita_disponibile ?? 1;
           const sku = String((item.extra_data ?? {})['SKU'] ?? '').trim();
-          return { id: item.id, item_code: item.item_code, identifier, desc, prezzo, lotto_id: item.lotto_id, lotto_codice, quantita_disponibile: qtaDisp, sku };
-        });
+
+          return {
+            id: item.id,
+            item_code: item.item_code,
+            identifier,
+            desc,
+            prezzo,
+            lotto_id: displayLottoId,
+            lotto_codice: displayLottoCodice,
+            quantita_disponibile: qtaPerStore,
+            sku,
+          } as SfogliaItem;
+        })
+        .filter(Boolean) as SfogliaItem[];
 
       console.log('[Cassa] sfoglia loaded — items disponibili:', result.length);
       setSfogliaItems(result);
@@ -328,11 +371,46 @@ export default function CassaScreen() {
           .eq('id', data.lotto_id)
           .single();
 
-        if (!lottoData || lottoData.store_id !== storeId || lottoData.stato !== 'caricato') {
-          console.log('[Cassa] item not available in this store — lotto store_id:', lottoData?.store_id, 'expected:', storeId, 'stato:', lottoData?.stato);
-          setSearchError(`Articolo non disponibile in questo store`);
-          return;
+        const directlyInStore = lottoData && lottoData.store_id === storeId && lottoData.stato === 'caricato';
+
+        if (!directlyInStore) {
+          // Check if any unit belongs to this store (multi-unit cross-store article)
+          const units: any[] = Array.isArray(data.extra_data?.units) ? data.extra_data.units : [];
+          if (units.length > 0) {
+            const { data: storeLotti } = await db
+              .from('lotti')
+              .select('id')
+              .eq('store_id', storeId)
+              .eq('stato', 'caricato');
+            const storeLottiIds = new Set((storeLotti ?? []).map((l: any) => l.id));
+            const hasUnitInStore = units.some((u: any) => u?.LottoId && storeLottiIds.has(u.LottoId));
+            console.log('[Cassa] cross-store unit check — hasUnitInStore:', hasUnitInStore, 'units:', units.length);
+            if (!hasUnitInStore) {
+              console.log('[Cassa] item not available in this store — lotto store_id:', lottoData?.store_id, 'expected:', storeId, 'stato:', lottoData?.stato);
+              setSearchError(`Articolo non disponibile in questo store`);
+              return;
+            }
+          } else {
+            console.log('[Cassa] item not available in this store — lotto store_id:', lottoData?.store_id, 'expected:', storeId, 'stato:', lottoData?.stato);
+            setSearchError(`Articolo non disponibile in questo store`);
+            return;
+          }
         }
+      }
+
+      // Compute per-store available quantity for multi-unit articles
+      const unitsForQta: any[] = Array.isArray(data.extra_data?.units) ? data.extra_data.units : [];
+      let effectiveQtaDisp = qtaDisp;
+      if (unitsForQta.length > 0 && storeId) {
+        const { data: storeLottiForQta } = await db
+          .from('lotti')
+          .select('id')
+          .eq('store_id', storeId)
+          .eq('stato', 'caricato');
+        const storeLottiIdsForQta = new Set((storeLottiForQta ?? []).map((l: any) => l.id));
+        const unitsInStore = unitsForQta.filter((u: any) => u?.LottoId && storeLottiIdsForQta.has(u.LottoId)).length;
+        console.log('[Cassa] per-store unit count:', unitsInStore, 'of', unitsForQta.length, 'total units');
+        if (unitsInStore > 0) effectiveQtaDisp = unitsInStore;
       }
 
       // Verifica che l'articolo non sia già stato venduto in questo store
@@ -376,11 +454,11 @@ export default function CassaScreen() {
         prezzo,
         lotto_id: data.lotto_id ?? null,
         quantita: 1,
-        quantita_disponibile: qtaDisp,
+        quantita_disponibile: effectiveQtaDisp,
         status: (data as any).status ?? 'processing',
         unitIndex: matchedUnitIndex,
       };
-      console.log('[Cassa] item added to cart:', identifier, 'prezzo:', prezzo, 'qtaDisp:', qtaDisp, 'unitIndex:', matchedUnitIndex);
+      console.log('[Cassa] item added to cart:', identifier, 'prezzo:', prezzo, 'qtaDisp:', qtaDisp, 'effectiveQtaDisp:', effectiveQtaDisp, 'unitIndex:', matchedUnitIndex);
       setCart(prev => [newItem, ...prev]);
       setSearchQuery('');
     } catch (err) {
