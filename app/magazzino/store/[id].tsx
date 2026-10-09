@@ -123,8 +123,8 @@ export default function DettaglioStoreScreen() {
         const si = Array.isArray(row.supplier_items) ? row.supplier_items[0] : row.supplier_items;
         const od = si?.original_data ?? {};
         const identifier = od['LPN'] ?? od['PkgID'] ?? si?.item_code ?? '—';
-        const descKey = Object.keys(od).find((k: string) => k.toLowerCase() === 'itemdesc');
-        const desc = descKey ? (od[descKey] || '—') : '—';
+        const legacyDescKey = Object.keys(od).find((k: string) => k.toLowerCase() === 'itemdesc');
+        const desc = od['Title'] ?? od['title'] ?? od['descrizione'] ?? od['Descrizione'] ?? (legacyDescKey ? (od[legacyDescKey] || '—') : '—');
         return {
           id: row.id,
           articolo_id: row.articolo_id,
