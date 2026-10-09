@@ -5,12 +5,10 @@ import {
   ScrollView,
   ActivityIndicator,
   TouchableOpacity,
-  Platform,
-  Modal,
+  TextInput,
 } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { BarChart3, ArrowLeft, AlertTriangle, TrendingUp, TrendingDown, Package } from 'lucide-react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { COLORS } from '@/constants/AppColors';
 import { AnimatedPressable } from '@/components/AnimatedPressable';
 import { db } from '@/utils/db';
@@ -121,13 +119,33 @@ export default function RiconciliazioneScreen() {
 
   const today = new Date();
   const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  // Format Date → "dd/mm/yyyy"
+  const dateToStr = (d: Date): string => {
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  };
+
+  // Parse "dd/mm/yyyy" → Date | null
+  const strToDate = (s: string): Date | null => {
+    const parts = s.split('/');
+    if (parts.length !== 3) return null;
+    const dd = parseInt(parts[0], 10);
+    const mm = parseInt(parts[1], 10) - 1;
+    const yyyy = parseInt(parts[2], 10);
+    if (isNaN(dd) || isNaN(mm) || isNaN(yyyy)) return null;
+    if (yyyy < 2000 || yyyy > 2100) return null;
+    const d = new Date(yyyy, mm, dd, 12, 0, 0);
+    if (isNaN(d.getTime())) return null;
+    return d;
+  };
+
   const [dataInizio, setDataInizio] = useState<Date>(firstOfMonth);
   const [dataFine, setDataFine] = useState<Date>(today);
-  const [showPickerInizio, setShowPickerInizio] = useState(false);
-  const [showPickerFine, setShowPickerFine] = useState(false);
-
-  const inputInizioRef = React.useRef<any>(null);
-  const inputFineRef = React.useRef<any>(null);
+  const [inputInizio, setInputInizio] = useState<string>(dateToStr(firstOfMonth));
+  const [inputFine, setInputFine] = useState<string>(dateToStr(today));
 
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<RiconciliazioneData | null>(null);
@@ -316,156 +334,50 @@ export default function RiconciliazioneScreen() {
           {/* Date range */}
           <View style={{ flexDirection: 'row', gap: 10 }}>
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 6 }}>Dal</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  console.log('[Riconciliazione] date inizio picker opened');
-                  if (Platform.OS === 'web') {
-                    inputInizioRef.current?.click();
-                  } else {
-                    setShowPickerInizio(true);
-                  }
+              <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 6 }}>Dal (gg/mm/aaaa)</Text>
+              <TextInput
+                value={inputInizio}
+                onChangeText={(text) => {
+                  console.log('[Riconciliazione] inputInizio changed:', text);
+                  setInputInizio(text);
+                  const d = strToDate(text);
+                  if (d) setDataInizio(d);
                 }}
+                placeholder="01/10/2026"
+                placeholderTextColor={COLORS.textTertiary}
+                keyboardType="numeric"
+                maxLength={10}
                 style={{
-                  backgroundColor: COLORS.surfaceSecondary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11,
+                  backgroundColor: COLORS.surfaceSecondary, borderRadius: 10,
+                  paddingHorizontal: 12, paddingVertical: 11,
                   borderWidth: 1, borderColor: COLORS.border,
+                  fontSize: 14, color: COLORS.text, fontWeight: '500',
                 }}
-                activeOpacity={0.8}
-              >
-                <Text style={{ fontSize: 14, color: COLORS.text, fontWeight: '500' }}>{formatDate(dataInizio)}</Text>
-                {Platform.OS === 'web' && (
-                  <input
-                    ref={inputInizioRef}
-                    type="date"
-                    value={dataInizio.toISOString().split('T')[0]}
-                    max={dataFine.toISOString().split('T')[0]}
-                    onChange={(e: any) => {
-                      if (e.target.value) {
-                        const d = new Date(e.target.value + 'T12:00:00');
-                        console.log('[Riconciliazione] dataInizio changed (web):', d.toISOString());
-                        setDataInizio(d);
-                      }
-                    }}
-                    style={{ position: 'absolute', opacity: 0, width: 1, height: 1, pointerEvents: 'none' }}
-                  />
-                )}
-              </TouchableOpacity>
+              />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 6 }}>Al</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  console.log('[Riconciliazione] date fine picker opened');
-                  if (Platform.OS === 'web') {
-                    inputFineRef.current?.click();
-                  } else {
-                    setShowPickerFine(true);
-                  }
+              <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 6 }}>Al (gg/mm/aaaa)</Text>
+              <TextInput
+                value={inputFine}
+                onChangeText={(text) => {
+                  console.log('[Riconciliazione] inputFine changed:', text);
+                  setInputFine(text);
+                  const d = strToDate(text);
+                  if (d) setDataFine(d);
                 }}
+                placeholder="09/10/2026"
+                placeholderTextColor={COLORS.textTertiary}
+                keyboardType="numeric"
+                maxLength={10}
                 style={{
-                  backgroundColor: COLORS.surfaceSecondary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11,
+                  backgroundColor: COLORS.surfaceSecondary, borderRadius: 10,
+                  paddingHorizontal: 12, paddingVertical: 11,
                   borderWidth: 1, borderColor: COLORS.border,
+                  fontSize: 14, color: COLORS.text, fontWeight: '500',
                 }}
-                activeOpacity={0.8}
-              >
-                <Text style={{ fontSize: 14, color: COLORS.text, fontWeight: '500' }}>{formatDate(dataFine)}</Text>
-                {Platform.OS === 'web' && (
-                  <input
-                    ref={inputFineRef}
-                    type="date"
-                    value={dataFine.toISOString().split('T')[0]}
-                    min={dataInizio.toISOString().split('T')[0]}
-                    max={new Date().toISOString().split('T')[0]}
-                    onChange={(e: any) => {
-                      if (e.target.value) {
-                        const d = new Date(e.target.value + 'T12:00:00');
-                        console.log('[Riconciliazione] dataFine changed (web):', d.toISOString());
-                        setDataFine(d);
-                      }
-                    }}
-                    style={{ position: 'absolute', opacity: 0, width: 1, height: 1, pointerEvents: 'none' }}
-                  />
-                )}
-              </TouchableOpacity>
+              />
             </View>
           </View>
-
-          {/* Date pickers — iOS inline, Android modal spinner */}
-          {showPickerInizio && (
-            Platform.OS === 'android' ? (
-              <Modal transparent animationType="fade">
-                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
-                  <View style={{ backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, width: '85%' }}>
-                    <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 12 }}>Data inizio</Text>
-                    <DateTimePicker
-                      value={dataInizio}
-                      mode="date"
-                      display="spinner"
-                      onChange={(_, d) => {
-                        setShowPickerInizio(false);
-                        if (d) { console.log('[Riconciliazione] dataInizio changed:', d.toISOString()); setDataInizio(d); }
-                      }}
-                      maximumDate={dataFine}
-                      style={{ width: '100%' }}
-                    />
-                    <TouchableOpacity onPress={() => { console.log('[Riconciliazione] dataInizio picker cancelled'); setShowPickerInizio(false); }} style={{ marginTop: 8, alignItems: 'center', padding: 10 }}>
-                      <Text style={{ color: COLORS.primary, fontWeight: '600' }}>Annulla</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </Modal>
-            ) : (
-              <DateTimePicker
-                value={dataInizio}
-                mode="date"
-                display="inline"
-                onChange={(_, d) => {
-                  setShowPickerInizio(false);
-                  if (d) { console.log('[Riconciliazione] dataInizio changed:', d.toISOString()); setDataInizio(d); }
-                }}
-                maximumDate={dataFine}
-              />
-            )
-          )}
-
-          {showPickerFine && (
-            Platform.OS === 'android' ? (
-              <Modal transparent animationType="fade">
-                <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' }}>
-                  <View style={{ backgroundColor: COLORS.surface, borderRadius: 16, padding: 20, width: '85%' }}>
-                    <Text style={{ fontSize: 16, fontWeight: '700', color: COLORS.text, marginBottom: 12 }}>Data fine</Text>
-                    <DateTimePicker
-                      value={dataFine}
-                      mode="date"
-                      display="spinner"
-                      onChange={(_, d) => {
-                        setShowPickerFine(false);
-                        if (d) { console.log('[Riconciliazione] dataFine changed:', d.toISOString()); setDataFine(d); }
-                      }}
-                      minimumDate={dataInizio}
-                      maximumDate={today}
-                      style={{ width: '100%' }}
-                    />
-                    <TouchableOpacity onPress={() => { console.log('[Riconciliazione] dataFine picker cancelled'); setShowPickerFine(false); }} style={{ marginTop: 8, alignItems: 'center', padding: 10 }}>
-                      <Text style={{ color: COLORS.primary, fontWeight: '600' }}>Annulla</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </Modal>
-            ) : (
-              <DateTimePicker
-                value={dataFine}
-                mode="date"
-                display="inline"
-                onChange={(_, d) => {
-                  setShowPickerFine(false);
-                  if (d) { console.log('[Riconciliazione] dataFine changed:', d.toISOString()); setDataFine(d); }
-                }}
-                minimumDate={dataInizio}
-                maximumDate={today}
-              />
-            )
-          )}
 
           <AnimatedPressable onPress={handleCalcola} style={{ marginTop: 16, opacity: loading || !selectedStore ? 0.6 : 1 }}>
             <View style={{
