@@ -84,7 +84,7 @@ function AnimatedListItem({ index, children }: { index: number; children: React.
       Animated.timing(opacity, { toValue: 1, duration: 300, delay: index * 50, useNativeDriver: true }),
       Animated.timing(translateY, { toValue: 0, duration: 300, delay: index * 50, useNativeDriver: true }),
     ]).start();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lotto]); // eslint-disable-line react-hooks/exhaustive-deps
   return <Animated.View style={{ opacity, transform: [{ translateY }] }}>{children}</Animated.View>;
 }
 
@@ -158,31 +158,65 @@ export default function DettaglioLottoScreen() {
 
   const handleConfermaCarico = async () => {
     if (!selectedStore || !lotto) return;
-    const totalUnits = articoli.reduce((s, a) => s + ((a as any).quantita ?? 1), 0);
-    console.log('[DettaglioLotto] Conferma carico pressed — store:', selectedStore.nome, 'lotto:', lotto.codice_lotto, 'articoli:', articoli.length, 'unità totali:', totalUnits);
     setCaricando(true);
     setCaricaError(null);
     try {
-      // INSERT movimenti tipo='carico' per ogni articolo con quantita
-      const movimenti = articoli.map(a => ({
+      // For each article, compute how many units belong to THIS lotto
+      const articoliConQta = articoli.map(a => {
+        const ed = (a as any).extra_data ?? {};
+        const units: any[] = Array.isArray(ed.units) ? ed.units : [];
+        let qtaPerLotto: number;
+        if (units.length > 0) {
+          // Multi-unit: count only units whose LottoId matches this lotto
+          qtaPerLotto = units.filter(u => u?.LottoId === lotto.id).length;
+          // If no units match (e.g. single-unit article assigned via lotto_id), fall back to 1
+          if (qtaPerLotto === 0) qtaPerLotto = 1;
+        } else {
+          // Single-unit article: use quantita, capped at 1 for safety
+          qtaPerLotto = (a as any).quantita ?? 1;
+        }
+        return { ...a, qtaPerLotto };
+      });
+
+      const totalUnits = articoliConQta.reduce((s, a) => s + a.qtaPerLotto, 0);
+      console.log('[DettaglioLotto] Conferma carico — store:', selectedStore.nome, 'lotto:', lotto.codice_lotto, 'articoli:', articoli.length, 'unità per lotto:', totalUnits);
+
+      // INSERT movimenti with per-lotto quantity
+      const movimenti = articoliConQta.map(a => ({
         lotto_id: lotto.id,
         store_id: selectedStore.id,
         articolo_id: a.id,
         tipo: 'carico',
-        quantita: (a as any).quantita ?? 1,
+        quantita: a.qtaPerLotto,
       }));
       if (movimenti.length > 0) {
-        console.log('[DettaglioLotto] inserting movimenti carico:', movimenti.length, 'total units:', totalUnits);
         const { error: movErr } = await db.from('movimenti').insert(movimenti);
         if (movErr) throw movErr;
       }
-      // UPDATE lotto
+
+      // UPDATE quantita_disponibile for each article to the per-lotto count
+      for (const a of articoliConQta) {
+        const currentQtaDisp = (a as any).quantita_disponibile ?? 0;
+        const totalQta = (a as any).quantita ?? 1;
+        // If quantita_disponibile already equals totalQta, it was set by a previous (wrong) carico — correct it
+        // If quantita_disponibile is less than totalQta, accumulate correctly
+        const finalQtaDisp = currentQtaDisp >= totalQta
+          ? a.qtaPerLotto
+          : currentQtaDisp + a.qtaPerLotto;
+        await db
+          .from('supplier_items')
+          .update({ quantita_disponibile: finalQtaDisp })
+          .eq('id', a.id);
+      }
+
+      // UPDATE lotto stato
       const { error: lottoErr } = await db
         .from('lotti')
         .update({ store_id: selectedStore.id, stato: 'caricato' })
         .eq('id', lotto.id);
       if (lottoErr) throw lottoErr;
-      console.log('[DettaglioLotto] Carico completato con successo — store:', selectedStore.nome, 'unità:', totalUnits);
+
+      console.log('[DettaglioLotto] Carico completato — store:', selectedStore.nome, 'unità:', totalUnits);
       setShowStoreModal(false);
       fetchData();
     } catch (err: unknown) {
@@ -203,7 +237,12 @@ export default function DettaglioLottoScreen() {
     const isVenduto = item.venduto === true;
     const qtaTot = (item as any).quantita ?? 1;
     const qtaDisp = (item as any).quantita_disponibile ?? 0;
-    const showQtyBadge = qtaTot > 1;
+    const ed = (item as any).extra_data ?? {};
+    const units: any[] = Array.isArray(ed.units) ? ed.units : [];
+    const qtaPerLotto = units.length > 0
+      ? units.filter((u: any) => u?.LottoId === lotto?.id).length || 1
+      : qtaTot;
+    const showQtyBadge = qtaPerLotto > 1 || (qtaTot > 1 && units.length === 0);
     const isEsaurito = qtaDisp === 0 && qtaTot > 0;
 
     return (
@@ -245,7 +284,7 @@ export default function DettaglioLottoScreen() {
                 ) : (
                   <View style={{ backgroundColor: COLORS.primaryMuted, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, alignSelf: 'flex-start' }}>
                     <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.primary }}>
-                      Qtà: {qtaDisp}/{qtaTot}
+                      Qtà: {qtaDisp}/{qtaPerLotto}
                     </Text>
                   </View>
                 )}
