@@ -190,12 +190,15 @@ export default function ItemDetailScreen() {
   // Track whether we've mounted so the selezione effect doesn't overwrite a restored price
   const isMounted = useRef(false);
 
+  // True when the item's lotto has stato = 'caricato' (item is in store — lotto not editable)
+  const [isLottoInStore, setIsLottoInStore] = useState(false);
+
   const fetchLotti = useCallback(async () => {
     console.log('[ItemDetail] fetchLotti called');
     const { data, error } = await db
       .from('lotti')
       .select('id, codice_lotto, note, stato')
-      .in('stato', ['magazzino', 'caricato'])
+      .eq('stato', 'magazzino')
       .order('created_at', { ascending: false });
     if (error) {
       console.error('[ItemDetail] fetchLotti error:', error);
@@ -225,6 +228,20 @@ export default function ItemDetailScreen() {
       setItem(fetchedItem);
       setOriginalData({ ...(fetchedItem.original_data ?? {}) });
       setExtraData({ ...(fetchedItem.extra_data ?? {}) });
+
+      // Controlla se il lotto dell'articolo è in store (stato = 'caricato')
+      if (fetchedItem.lotto_id) {
+        const { data: lottoData } = await db
+          .from('lotti')
+          .select('stato')
+          .eq('id', fetchedItem.lotto_id)
+          .single();
+        const inStore = lottoData?.stato === 'caricato';
+        console.log('[ItemDetail] lotto stato check — lotto_id:', fetchedItem.lotto_id, 'stato:', lottoData?.stato, 'isLottoInStore:', inStore);
+        setIsLottoInStore(inStore);
+      } else {
+        setIsLottoInStore(false);
+      }
 
       // Pre-select AdjReason condition from loaded data
       const adjValue: string = fetchedItem.original_data?.['AdjReason'] ?? '';
@@ -1265,8 +1282,12 @@ export default function ItemDetailScreen() {
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <AnimatedPressable
-                style={{ flex: 1 }}
+                style={{ flex: 1, opacity: isLottoInStore ? 0.5 : 1 }}
                 onPress={() => {
+                  if (isLottoInStore) {
+                    console.log('[ItemDetail] lotto selector blocked — articolo in store');
+                    return;
+                  }
                   console.log('[ItemDetail] lotto selector pressed, refreshing lotti and opening modal');
                   fetchLotti();
                   setLottoModalVisible(true);
@@ -1275,7 +1296,7 @@ export default function ItemDetailScreen() {
                 <View
                   style={{
                     flex: 1,
-                    backgroundColor: COLORS.surfaceSecondary,
+                    backgroundColor: isLottoInStore ? COLORS.border : COLORS.surfaceSecondary,
                     borderRadius: 10,
                     borderWidth: 1,
                     borderColor: COLORS.border,
@@ -1291,7 +1312,7 @@ export default function ItemDetailScreen() {
                     <Text
                       style={{
                         fontSize: 15,
-                        color: lottoButtonIsPlaceholder ? COLORS.textTertiary : COLORS.text,
+                        color: isLottoInStore ? COLORS.textTertiary : (lottoButtonIsPlaceholder ? COLORS.textTertiary : COLORS.text),
                         fontWeight: lottoButtonIsPlaceholder ? '400' : '600',
                       }}
                       numberOfLines={1}
@@ -1304,26 +1325,36 @@ export default function ItemDetailScreen() {
                       </Text>
                     ) : null}
                   </View>
-                  <ChevronDown size={16} color={COLORS.textSecondary} style={{ marginLeft: 6 }} />
+                  <ChevronDown size={16} color={isLottoInStore ? COLORS.textTertiary : COLORS.textSecondary} style={{ marginLeft: 6 }} />
                 </View>
               </AnimatedPressable>
 
               {/* Camera button — scan lotto barcode */}
               <AnimatedPressable onPress={() => {
+                if (isLottoInStore) {
+                  console.log('[ItemDetail] scan LOTTO blocked — articolo in store');
+                  return;
+                }
                 console.log('[ItemDetail] scan LOTTO button pressed');
                 setScanTarget('lotto');
               }}>
                 <View style={{
                   width: 42, height: 42,
                   borderRadius: 10,
-                  backgroundColor: COLORS.primaryMuted,
+                  backgroundColor: isLottoInStore ? COLORS.border : COLORS.primaryMuted,
                   alignItems: 'center',
                   justifyContent: 'center',
+                  opacity: isLottoInStore ? 0.5 : 1,
                 }}>
-                  <Camera size={20} color={COLORS.primary} />
+                  <Camera size={20} color={isLottoInStore ? COLORS.textTertiary : COLORS.primary} />
                 </View>
               </AnimatedPressable>
             </View>
+            {isLottoInStore ? (
+              <Text style={{ fontSize: 11, color: COLORS.textTertiary, marginTop: 2 }}>
+                Articolo presente in store — lotto non modificabile
+              </Text>
+            ) : null}
           </View>
         </View>
 
