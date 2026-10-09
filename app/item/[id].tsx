@@ -48,6 +48,20 @@ type Lotto = {
   stato: string;
 };
 
+type UnitData = {
+  unitIndex: number;
+  Selezione: 'A' | 'B' | 'C' | '';
+  PrezzoVendita: string;
+  AdjReason: string;
+  SKU: string;
+  Lotto: string;
+  LottoId: string;
+  EANCorretto: string;
+  ASINCorretto: string;
+  processed_at: string;
+  processed_by: string;
+};
+
 function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
   return date.toLocaleDateString('it-IT', {
@@ -155,6 +169,11 @@ export default function ItemDetailScreen() {
 
   // Dati Fornitore collapsible state
   const [datiFornitoreOpen, setDatiFornitoreOpen] = useState(false);
+
+  // Multi-unit workflow state
+  const [totalUnits, setTotalUnits] = useState(1);
+  const [currentUnitIndex, setCurrentUnitIndex] = useState(1);
+  const [processedUnits, setProcessedUnits] = useState<UnitData[]>([]);
 
   // Track whether we've mounted so the selezione effect doesn't overwrite a restored price
   const isMounted = useRef(false);
@@ -283,6 +302,33 @@ export default function ItemDetailScreen() {
         const savedAsin2 = currentExtra['ASINCorretto'] ?? '';
         setAsinCorretto(savedAsin2 !== '' ? savedAsin2 : getOriginalField(fetchedItem.original_data ?? {}, 'ASIN'));
       }
+
+      // Multi-unit workflow initialization
+      const qty = fetchedItem.quantita ?? 1;
+      setTotalUnits(qty);
+      console.log('[ItemDetail] totalUnits:', qty);
+
+      if (qty > 1) {
+        const units: UnitData[] = (fetchedItem.extra_data as any)?.units ?? [];
+        setProcessedUnits(units);
+        const nextUnit = units.length + 1;
+        const resumeIndex = Math.min(nextUnit, qty);
+        setCurrentUnitIndex(resumeIndex);
+        console.log('[ItemDetail] multi-unit: processedUnits:', units.length, 'resuming at unit:', resumeIndex);
+
+        // If resuming mid-way, clear form fields for the new unit
+        if (units.length > 0 && units.length < qty) {
+          setSelezione(null);
+          setPrezzoVendita('');
+          setSelectedCondition(null);
+          setAltroText('');
+          setSkuVendita('');
+          setSelectedLotto(null);
+          setSelectedLottoId('');
+          setEanCorretto(normalizeEAN(getOriginalField(fetchedItem.original_data ?? {}, 'EAN')));
+          setAsinCorretto(getOriginalField(fetchedItem.original_data ?? {}, 'ASIN'));
+        }
+      }
     } catch (err) {
       console.error('[ItemDetail] fetchData exception:', err);
     } finally {
@@ -347,7 +393,7 @@ export default function ItemDetailScreen() {
   }, []);
 
   const handleSave = useCallback(async () => {
-    console.log('[ItemDetail] handleSave called', { id, processedBy: user?.username ?? '', selectedCondition, altroText, selezione, prezzoVendita, selectedLottoId, selectedLottoCodice: selectedLotto?.codice_lotto });
+    console.log('[ItemDetail] handleSave called', { id, processedBy: user?.username ?? '', selectedCondition, altroText, selezione, prezzoVendita, selectedLottoId, selectedLottoCodice: selectedLotto?.codice_lotto, totalUnits, currentUnitIndex });
     setSaving(true);
     try {
       // Compute final AdjReason value
@@ -373,6 +419,79 @@ export default function ItemDetailScreen() {
         EANCorretto: eanCorretto,
         ASINCorretto: asinCorretto,
       };
+
+      if (totalUnits > 1) {
+        // Multi-unit flow
+        const unitData: UnitData = {
+          unitIndex: currentUnitIndex,
+          Selezione: selezione ?? '',
+          PrezzoVendita: prezzoVendita,
+          AdjReason: adjReason,
+          SKU: skuVendita,
+          Lotto: selectedLotto?.codice_lotto ?? '',
+          LottoId: selectedLottoId ?? '',
+          EANCorretto: eanCorretto,
+          ASINCorretto: asinCorretto,
+          processed_at: new Date().toISOString(),
+          processed_by: user?.username ?? '',
+        };
+
+        const newUnits = [...processedUnits, unitData];
+        const isLastUnit = currentUnitIndex >= totalUnits;
+
+        console.log('[ItemDetail] multi-unit save: unit', currentUnitIndex, 'of', totalUnits, '| isLastUnit:', isLastUnit);
+
+        const updatePayload: Record<string, unknown> = {
+          extra_data: {
+            ...updatedExtraData,
+            units: newUnits,
+            ...(isLastUnit ? {
+              Selezione: selezione ?? '',
+              PrezzoVendita: prezzoVendita,
+              AdjReason: adjReason,
+              SKU: skuVendita,
+              Lotto: selectedLotto?.codice_lotto ?? '',
+              LottoId: selectedLottoId ?? '',
+              EANCorretto: eanCorretto,
+              ASINCorretto: asinCorretto,
+            } : {}),
+          },
+          original_data: updatedOriginalData,
+          status: isLastUnit ? 'completed' : 'processing',
+          processed_at: isLastUnit ? new Date().toISOString() : (item?.processed_at ?? null),
+          processed_by: isLastUnit ? (user?.username || null) : (item?.processed_by ?? null),
+        };
+
+        const { error } = await db.from('supplier_items').update(updatePayload).eq('id', id);
+        if (error) {
+          console.error('[ItemDetail] multi-unit save error:', error);
+          throw error;
+        }
+
+        if (isLastUnit) {
+          console.log('[ItemDetail] all units processed, lavorazione completata');
+          showToast('Lavorazione completata!', 'success');
+          router.back();
+        } else {
+          // Advance to next unit — reset form fields
+          setProcessedUnits(newUnits);
+          setCurrentUnitIndex(currentUnitIndex + 1);
+          setSelezione(null);
+          setPrezzoVendita('');
+          setSelectedCondition(null);
+          setAltroText('');
+          setSkuVendita('');
+          setSelectedLotto(null);
+          setSelectedLottoId('');
+          setEanCorretto(normalizeEAN(getOriginalField(originalData, 'EAN')));
+          setAsinCorretto(getOriginalField(originalData, 'ASIN'));
+          console.log('[ItemDetail] advanced to unit', currentUnitIndex + 1);
+          showToast(`Unità ${currentUnitIndex} salvata`, 'success');
+        }
+        return;
+      }
+
+      // Single-unit flow (unchanged)
       console.log('[ItemDetail] saving extraData:', { Selezione: updatedExtraData.Selezione, PrezzoVendita: updatedExtraData.PrezzoVendita, SKU: updatedExtraData.SKU, Lotto: updatedExtraData.Lotto, LottoId: updatedExtraData.LottoId, EANCorretto: updatedExtraData.EANCorretto, ASINCorretto: updatedExtraData.ASINCorretto });
 
       const { error } = await db
@@ -404,7 +523,7 @@ export default function ItemDetailScreen() {
     } finally {
       setSaving(false);
     }
-  }, [id, originalData, extraData, user, selectedCondition, altroText, selezione, prezzoVendita, skuVendita, selectedLotto, selectedLottoId, eanCorretto, asinCorretto, showToast, router]);
+  }, [id, originalData, extraData, user, selectedCondition, altroText, selezione, prezzoVendita, skuVendita, selectedLotto, selectedLottoId, eanCorretto, asinCorretto, totalUnits, currentUnitIndex, processedUnits, item, showToast, router]);
 
   const itemDesc = getOriginalField(originalData, 'ITEMDESC');
   const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(itemDesc + ' prezzo')}`;
@@ -434,6 +553,11 @@ export default function ItemDetailScreen() {
 
   const extraColumns = file?.extra_columns ?? [];
   const processedAtDisplay = item?.processed_at ? formatDate(item.processed_at) : null;
+  const saveButtonLabel = totalUnits > 1
+    ? (currentUnitIndex >= totalUnits ? 'Completa lavorazione' : `Salva e prossima unità (${currentUnitIndex}/${totalUnits})`)
+    : 'Salva';
+  const progressPercent = totalUnits > 0 ? (processedUnits.length / totalUnits) * 100 : 0;
+  const allUnitsProcessed = processedUnits.length === totalUnits;
 
   return (
     <KeyboardAvoidingView
@@ -451,6 +575,87 @@ export default function ItemDetailScreen() {
         contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ padding: 16, paddingBottom: 120, gap: 16 }}
       >
+        {/* Multi-unit progress indicator */}
+        {totalUnits > 1 && (
+          <View style={{
+            backgroundColor: COLORS.surface,
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            padding: 16,
+            gap: 12,
+          }}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.text }}>
+                Unità {Math.min(currentUnitIndex, totalUnits)} di {totalUnits}
+              </Text>
+              <Text style={{ fontSize: 13, color: COLORS.textSecondary }}>
+                {processedUnits.length} lavorate
+              </Text>
+            </View>
+
+            {/* Progress bar */}
+            <View style={{ height: 6, backgroundColor: COLORS.border, borderRadius: 3, overflow: 'hidden' }}>
+              <View style={{
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: allUnitsProcessed ? '#16A34A' : COLORS.primary,
+                width: `${progressPercent}%`,
+              }} />
+            </View>
+
+            {/* Already processed units summary */}
+            {processedUnits.length > 0 && (
+              <View style={{ gap: 6 }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary }}>
+                  Già lavorate:
+                </Text>
+                {processedUnits.map((u, i) => {
+                  const unitBgColor = u.Selezione === 'A' ? '#D1FAE5' : u.Selezione === 'B' ? '#DBEAFE' : '#FEF3C7';
+                  const unitTextColor = u.Selezione === 'A' ? '#065F46' : u.Selezione === 'B' ? '#1E40AF' : '#92400E';
+                  const priceDisplay = u.PrezzoVendita ? `€${u.PrezzoVendita}` : '—';
+                  return (
+                    <View key={i} style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8,
+                      paddingVertical: 4,
+                      paddingHorizontal: 8,
+                      backgroundColor: COLORS.background,
+                      borderRadius: 8,
+                    }}>
+                      <Text style={{ fontSize: 12, color: COLORS.textTertiary, width: 24 }}>#{u.unitIndex}</Text>
+                      {u.Selezione ? (
+                        <View style={{
+                          backgroundColor: unitBgColor,
+                          borderRadius: 4,
+                          paddingHorizontal: 6,
+                          paddingVertical: 2,
+                        }}>
+                          <Text style={{
+                            fontSize: 11,
+                            fontWeight: '700',
+                            color: unitTextColor,
+                          }}>
+                            {u.Selezione}
+                          </Text>
+                        </View>
+                      ) : null}
+                      <Text style={{ fontSize: 12, color: COLORS.text, flex: 1 }}>
+                        {priceDisplay}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: COLORS.textTertiary }}>
+                        {u.processed_by}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        )}
+
         {/* Status + processed info */}
         <View
           style={{
@@ -1003,7 +1208,7 @@ export default function ItemDetailScreen() {
                 <CheckCircle size={18} color="#FFFFFF" />
               )}
               <Text style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '700' }}>
-                {saving ? 'Salvataggio...' : 'Salva Modifiche'}
+                {saving ? 'Salvataggio...' : saveButtonLabel}
               </Text>
             </View>
           </AnimatedPressable>

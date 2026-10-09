@@ -184,6 +184,7 @@ export default function LavorazioneScreen() {
     const isCompleted = item.status === 'completed';
     const qtaDisp = item.quantita_disponibile ?? 1;
     const showQtyBadge = qtaDisp > 1;
+    const processedUnitsCount = (item.extra_data as any)?.units?.length ?? 0;
 
     // Use standard Title key, fallback to legacy itemdesc auto-detection, then item_code
     const descValue = (() => {
@@ -241,7 +242,22 @@ export default function LavorazioneScreen() {
               </Text>
               <View style={{ marginTop: 6, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                 <ItemStatusBadge status={itemStatus} size="sm" />
-                {showQtyBadge && (
+                {showQtyBadge && (item.quantita ?? 1) > 1 ? (
+                  <View style={{
+                    backgroundColor: processedUnitsCount === (item.quantita ?? 1) ? '#D1FAE5' : '#DBEAFE',
+                    borderRadius: 6,
+                    paddingHorizontal: 7,
+                    paddingVertical: 3,
+                  }}>
+                    <Text style={{
+                      fontSize: 11,
+                      fontWeight: '700',
+                      color: processedUnitsCount === (item.quantita ?? 1) ? '#065F46' : '#1E40AF',
+                    }}>
+                      {processedUnitsCount}/{item.quantita} lav.
+                    </Text>
+                  </View>
+                ) : showQtyBadge ? (
                   <View style={{
                     backgroundColor: COLORS.primaryMuted,
                     borderRadius: 5,
@@ -253,7 +269,7 @@ export default function LavorazioneScreen() {
                       Qtà: {qtaDisp}
                     </Text>
                   </View>
-                )}
+                ) : null}
               </View>
             </View>
 
