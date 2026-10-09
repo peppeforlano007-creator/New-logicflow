@@ -676,43 +676,31 @@ export default function RicezioneScreen() {
       console.log('[Ricezione] handleCompletaRicezione — nothing to update');
       return;
     }
-    console.log('[Ricezione] handleCompletaRicezione — updating', itemsToUpdate.length, 'items');
+    console.log('[Ricezione] handleCompletaRicezione — building batch for', itemsToUpdate.length, 'items');
     setCompletingRicezione(true);
     const now = new Date().toISOString();
-    let updatedCount = 0;
     try {
-      for (const { ean, item } of itemsToUpdate) {
-        const qty = eanCounts[ean] ?? 0;
-        console.log('[Ricezione] handleCompletaRicezione — fetching fresh extra_data for item:', item.id, '| ean:', ean, '| qty:', qty);
-        const { data: freshData, error: freshErr } = await db
-          .from('supplier_items')
-          .select('extra_data')
-          .eq('id', item.id)
-          .single();
-        if (freshErr) {
-          console.warn('[Ricezione] handleCompletaRicezione — fresh extra_data error for item:', item.id, freshErr);
-        }
-        const freshExtraData = (freshData?.extra_data as Record<string, unknown> | null) ?? {};
-        const newExtraData: Record<string, unknown> = {
-          ...freshExtraData,
-          ean_received_qty: qty,
+      const updates = itemsToUpdate.map(({ ean, item }) => ({
+        id: item.id,
+        extra_data: {
+          ...(item.extra_data as Record<string, unknown> ?? {}),
+          ean_received_qty: eanCounts[ean] ?? 0,
           received: 'true',
           received_at: now,
-        };
-        console.log('[Ricezione] handleCompletaRicezione — updating item:', item.id, '| newExtraData:', JSON.stringify(newExtraData));
-        const { error: updateErr } = await db
-          .from('supplier_items')
-          .update({ extra_data: newExtraData, status: 'processing' })
-          .eq('id', item.id);
-        if (updateErr) {
-          console.error('[Ricezione] handleCompletaRicezione — update error for item:', item.id, updateErr);
-        } else {
-          updatedCount += 1;
-          console.log('[Ricezione] handleCompletaRicezione — item updated:', item.id);
-        }
+        },
+        status: 'processing' as const,
+      }));
+      console.log('[Ricezione] handleCompletaRicezione — sending batch upsert, count:', updates.length);
+      const { error: batchErr } = await db
+        .from('supplier_items')
+        .upsert(updates, { onConflict: 'id' });
+      if (batchErr) {
+        console.error('[Ricezione] handleCompletaRicezione — batch upsert error:', batchErr);
+        throw batchErr;
       }
+      const updatedCount = updates.length;
       setReceivedItems(prev => prev + updatedCount);
-      console.log('[Ricezione] handleCompletaRicezione — done, updatedCount:', updatedCount);
+      console.log('[Ricezione] handleCompletaRicezione — batch upsert done, updatedCount:', updatedCount);
       showToast(`Ricezione completata — ${updatedCount} articoli aggiornati`, 'success');
       loadActiveFiles();
     } catch (err: any) {
