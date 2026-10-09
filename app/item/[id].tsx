@@ -313,8 +313,36 @@ export default function ItemDetailScreen() {
         setAsinCorretto(savedAsin2 !== '' ? savedAsin2 : getOriginalField(fetchedItem.original_data ?? {}, 'ASIN'));
       }
 
-      // Multi-unit workflow initialization
+      // ── Lotto reconciliation: if lotto_id on the DB record differs from extra_data,
+      //    the item was moved via Scarico and extra_data is stale. Reconcile from DB.
       const qty = fetchedItem.quantita ?? 1;
+      const dbLottoId = fetchedItem.lotto_id ?? '';
+      const extraLottoId = (fetchedItem.extra_data?.['LottoId'] as string | undefined) ?? '';
+      const isMultiUnitResuming = qty > 1 && ((fetchedItem.extra_data as any)?.units ?? []).length > 0;
+
+      if (dbLottoId && (!extraLottoId || extraLottoId !== dbLottoId)) {
+        console.log('[ItemDetail] lotto_id mismatch — DB:', dbLottoId, 'extra_data:', extraLottoId, '— reconciling from DB');
+        const dbLotto = lottiList.find(l => l.id === dbLottoId) ?? null;
+        if (dbLotto) {
+          console.log('[ItemDetail] reconciled lotto from DB:', dbLotto.codice_lotto);
+          // For multi-unit items that are mid-way through processing, do NOT overwrite
+          // the current unit's form lotto — only reconcile when no units have been processed yet.
+          if (!isMultiUnitResuming) {
+            setSelectedLotto(dbLotto);
+            setSelectedLottoId(dbLotto.id);
+          }
+          // Always update the local extraData state so it reflects the current lotto
+          setExtraData(prev => ({
+            ...prev,
+            Lotto: dbLotto.codice_lotto,
+            LottoId: dbLotto.id,
+          }));
+        } else {
+          console.log('[ItemDetail] lotto_id', dbLottoId, 'not found in active lotti list — skipping reconciliation');
+        }
+      }
+
+      // Multi-unit workflow initialization
       setTotalUnits(qty);
       console.log('[ItemDetail] totalUnits:', qty);
 

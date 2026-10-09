@@ -281,11 +281,41 @@ export default function ScaricaScreen() {
       );
       if (movErr) throw movErr;
 
-      console.log('[Scarico] updating supplier_items lotto_id for', selectedIds.length, 'items → lotto:', nuovoLotto.codice_lotto);
-      const { error: siErr } = await db
+      console.log('[Scarico] fetching current extra_data for', selectedIds.length, 'items before update');
+      const { data: currentItems, error: fetchErr } = await db
         .from('supplier_items')
-        .update({ lotto_id: nuovoLotto.id })
+        .select('id, extra_data, quantita')
         .in('id', selectedIds);
+      if (fetchErr) throw fetchErr;
+
+      console.log('[Scarico] building extra_data updates for lotto:', nuovoLotto.codice_lotto, 'id:', nuovoLotto.id);
+      const updatePromises = (currentItems ?? []).map((ci: { id: string; extra_data: Record<string, unknown> | null; quantita: number | null }) => {
+        const currentExtra: Record<string, unknown> = { ...(ci.extra_data ?? {}) };
+        currentExtra['Lotto'] = nuovoLotto.codice_lotto;
+        currentExtra['LottoId'] = nuovoLotto.id;
+
+        const qty = ci.quantita ?? 1;
+        if (qty > 1) {
+          const units: Record<string, unknown>[] = Array.isArray(currentExtra['units'])
+            ? (currentExtra['units'] as Record<string, unknown>[]).map(u => ({
+                ...u,
+                Lotto: nuovoLotto.codice_lotto,
+                LottoId: nuovoLotto.id,
+              }))
+            : [];
+          currentExtra['units'] = units;
+          console.log('[Scarico] updated', units.length, 'units in extra_data for item:', ci.id);
+        }
+
+        return db
+          .from('supplier_items')
+          .update({ lotto_id: nuovoLotto.id, extra_data: currentExtra })
+          .eq('id', ci.id);
+      });
+
+      console.log('[Scarico] updating supplier_items lotto_id + extra_data for', updatePromises.length, 'items → lotto:', nuovoLotto.codice_lotto);
+      const results = await Promise.all(updatePromises);
+      const siErr = results.find(r => r.error)?.error ?? null;
       if (siErr) throw siErr;
 
       console.log('[Scarico] scarico completato — items:', selectedIds.length, 'lotto:', nuovoLotto.codice_lotto);
