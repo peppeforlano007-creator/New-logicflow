@@ -419,10 +419,24 @@ export default function RicezioneScreen() {
           }
 
           const newCount = currentCount + 1;
-          console.log('[Ricezione] EAN incrementing count (local only):', currentCount, '->', newCount, '/', quantita);
+          console.log('[Ricezione] EAN incrementing count:', currentCount, '->', newCount, '/', quantita);
 
           setEanCounts(prev => ({ ...prev, [trimmed]: newCount }));
           setSelectAll(false);
+
+          // Persist ean_received_qty to DB immediately (no status/received change)
+          const currentExtraData = (matchedItem.extra_data as Record<string, unknown>) ?? {};
+          console.log('[Ricezione] EAN saving ean_received_qty to DB — item:', matchedItem.id, 'qty:', newCount);
+          db.from('supplier_items')
+            .update({ extra_data: { ...currentExtraData, ean_received_qty: newCount } })
+            .eq('id', matchedItem.id)
+            .then(({ error: eanUpdateErr }) => {
+              if (eanUpdateErr) {
+                console.error('[Ricezione] EAN ean_received_qty update error:', eanUpdateErr);
+              } else {
+                console.log('[Ricezione] EAN ean_received_qty saved successfully — item:', matchedItem.id, 'qty:', newCount);
+              }
+            });
 
           const eanInfo = `${newCount}/${quantita} unità ricevute`;
           const activeFileMap = new Map<string, SupplierFile>(activeFiles.map(f => [f.id, f]));
@@ -703,13 +717,14 @@ export default function RicezioneScreen() {
       console.log('[Ricezione] handleCompletaRicezione — batch upsert done, updatedCount:', updatedCount);
       showToast(`Ricezione completata — ${updatedCount} articoli aggiornati`, 'success');
       loadActiveFiles();
+      loadEanItems(activeFiles);
     } catch (err: any) {
       console.error('[Ricezione] handleCompletaRicezione exception:', err);
       showToast(err?.message ?? 'Errore durante il completamento', 'error');
     } finally {
       setCompletingRicezione(false);
     }
-  }, [eanItems, eanCounts, showToast, loadActiveFiles]);
+  }, [eanItems, eanCounts, activeFiles, showToast, loadActiveFiles, loadEanItems]);
 
   // ── Derived: global progress ───────────────────────────────────────────────
 
