@@ -381,18 +381,26 @@ export default function ScaricaScreen() {
       console.log('[Scarico] lotti di origine da verificare:', originLottoIds);
 
       for (const lottoId of originLottoIds) {
-        const { count } = await db
+        const { count, error: countErr } = await db
           .from('supplier_items')
           .select('id', { count: 'exact', head: true })
           .eq('lotto_id', lottoId)
           .gt('quantita_disponibile', 0);
 
+        console.log('[Scarico] lotto', lottoId, '— articoli con quantita_disponibile > 0 rimasti:', count, countErr ? '| countErr:' + JSON.stringify(countErr) : '');
+
         if ((count ?? 0) === 0) {
-          await db
+          const { error: updateErr } = await db
             .from('lotti')
             .update({ stato: 'magazzino', store_id: null })
             .eq('id', lottoId);
-          console.log('[Scarico] Lotto', lottoId, 'tornato a magazzino (vuoto dopo scarico)');
+          if (updateErr) {
+            console.error('[Scarico] ERRORE aggiornamento lotto', lottoId, 'a magazzino:', JSON.stringify(updateErr));
+          } else {
+            console.log('[Scarico] Lotto', lottoId, 'tornato a magazzino (vuoto dopo scarico) ✓');
+          }
+        } else {
+          console.log('[Scarico] Lotto', lottoId, 'NON resettato — ha ancora', count, 'articoli disponibili');
         }
       }
 
