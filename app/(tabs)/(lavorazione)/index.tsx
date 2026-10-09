@@ -185,6 +185,10 @@ export default function LavorazioneScreen() {
     const qtaDisp = item.quantita_disponibile ?? 1;
     const showQtyBadge = qtaDisp > 1;
     const processedUnitsCount = (item.extra_data as any)?.units?.length ?? 0;
+    const eanReceived = (item.extra_data as any)?.ean_received_qty;
+    const totalLav = (typeof eanReceived === 'number' && eanReceived > 0)
+      ? Math.min(eanReceived, item.quantita ?? 1)
+      : (item.quantita ?? 1);
 
     // Use standard Title key, fallback to legacy itemdesc auto-detection, then item_code
     const descValue = (() => {
@@ -242,9 +246,9 @@ export default function LavorazioneScreen() {
               </Text>
               <View style={{ marginTop: 6, flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                 <ItemStatusBadge status={itemStatus} size="sm" />
-                {showQtyBadge && (item.quantita ?? 1) > 1 ? (
+                {showQtyBadge && totalLav > 1 ? (
                   <View style={{
-                    backgroundColor: processedUnitsCount === (item.quantita ?? 1) ? '#D1FAE5' : '#DBEAFE',
+                    backgroundColor: processedUnitsCount === totalLav ? '#D1FAE5' : '#DBEAFE',
                     borderRadius: 6,
                     paddingHorizontal: 7,
                     paddingVertical: 3,
@@ -252,9 +256,9 @@ export default function LavorazioneScreen() {
                     <Text style={{
                       fontSize: 11,
                       fontWeight: '700',
-                      color: processedUnitsCount === (item.quantita ?? 1) ? '#065F46' : '#1E40AF',
+                      color: processedUnitsCount === totalLav ? '#065F46' : '#1E40AF',
                     }}>
-                      {processedUnitsCount}/{item.quantita} lav.
+                      {processedUnitsCount}/{totalLav} lav.
                     </Text>
                   </View>
                 ) : showQtyBadge ? (
