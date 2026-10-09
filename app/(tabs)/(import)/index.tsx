@@ -147,6 +147,24 @@ export default function ImportScreen() {
     setActivePicker(null);
   }, []);
 
+  // Auto-apply mappings when previewCols becomes available
+  useEffect(() => {
+    if (previewCols.length === 0) return;
+    setMappings(prev => {
+      const next = { ...prev };
+      for (const field of MAPPING_FIELDS) {
+        if (next[field.key] === null) {
+          const match = previewCols.find(col => isAutoMatch(col, field.key));
+          if (match) {
+            console.log('[Import] Auto-mapping field:', field.key, '→', match);
+            next[field.key] = match;
+          }
+        }
+      }
+      return next;
+    });
+  }, [previewCols]);
+
   const fetchFiles = useCallback(async () => {
     console.log('[Import] fetchFiles called');
     try {
@@ -215,6 +233,23 @@ export default function ImportScreen() {
       // Quick preview: read base64 and call edge function for preview
       try {
         const base64 = await readFileAsBase64(asset.uri);
+
+        // Immediately extract headers locally for instant picker population (CSV only)
+        try {
+          const isCSV = asset.name.toLowerCase().endsWith('.csv');
+          if (isCSV) {
+            const text = atob(base64);
+            const firstLine = text.split(/\r?\n/)[0] ?? '';
+            const cols = firstLine.split(',').map(h => h.replace(/^"|"$/g, '').trim()).filter(Boolean);
+            if (cols.length > 0) {
+              console.log('[Import] Local CSV headers extracted:', cols);
+              setPreviewCols(cols);
+            }
+          }
+        } catch (localErr) {
+          console.warn('[Import] Local header extraction failed:', localErr);
+        }
+
         console.log('[Import] Calling parse-supplier-file for preview');
         const response = await fetch(`${SUPABASE_URL}/functions/v1/parse-supplier-file`, {
           method: 'POST',
@@ -908,6 +943,16 @@ export default function ImportScreen() {
           )}
 
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            {/* Loading state when columns not yet available */}
+            {previewCols.length === 0 && (
+              <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+                <ActivityIndicator color={COLORS.primary} />
+                <Text style={{ marginTop: 12, color: COLORS.textSecondary, fontSize: 14 }}>
+                  Caricamento colonne...
+                </Text>
+              </View>
+            )}
+
             {/* Nessuna option */}
             {(() => {
               const isNoneSelected = activePicker !== null && mappings[activePicker] === null;
