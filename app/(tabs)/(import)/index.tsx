@@ -39,6 +39,25 @@ function base64ToUint8Array(b64: string): Uint8Array {
   return bytes;
 }
 
+/**
+ * Decode a base64 string to a UTF-8 text string, safely handling:
+ * - UTF-8 BOM (EF BB BF) — stripped automatically
+ * - Multi-byte UTF-8 sequences (accents, special chars)
+ * - Fallback to latin-1 if UTF-8 decode fails
+ */
+function base64ToUtf8Text(b64: string): string {
+  const bytes = base64ToUint8Array(b64); // already strips data URL prefix
+  // Strip UTF-8 BOM if present
+  const start = (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) ? 3 : 0;
+  const slice = bytes.slice(start);
+  try {
+    return new TextDecoder('utf-8').decode(slice);
+  } catch {
+    // Fallback: latin-1
+    return new TextDecoder('latin1').decode(slice);
+  }
+}
+
 // ─── Mapping field definitions ────────────────────────────────────────────────
 
 const MAPPING_FIELDS = [
@@ -298,10 +317,9 @@ export default function ImportScreen() {
           const isXLSX = asset.name.toLowerCase().endsWith('.xlsx') || asset.name.toLowerCase().endsWith('.xls');
 
           if (isCSV) {
-            const text = atob(stripBase64Prefix(base64));
+            const text = base64ToUtf8Text(base64);
             const firstLine = text.split(/\r?\n/)[0] ?? '';
-            // Handle tab-separated too
-            const sep = firstLine.includes('\t') ? '\t' : ',';
+            const sep = firstLine.includes('\t') ? '\t' : firstLine.includes(';') ? ';' : ',';
             const cols = firstLine.split(sep).map(h => h.replace(/^"|"$/g, '').trim()).filter(Boolean);
             if (cols.length > 0) {
               console.log('[Import] Local CSV headers extracted:', cols);
@@ -400,9 +418,9 @@ export default function ImportScreen() {
       let parsedHeaders: string[] = [];
 
       if (isCSV) {
-        const text = atob(stripBase64Prefix(base64));
+        const text = base64ToUtf8Text(base64);
         const lines = text.split(/\r?\n/).filter(l => l.trim());
-        const sep = lines[0]?.includes('\t') ? '\t' : ',';
+        const sep = lines[0]?.includes('\t') ? '\t' : lines[0]?.includes(';') ? ';' : ',';
         const hdrs = lines[0]?.split(sep).map(h => h.replace(/^"|"$/g, '').trim()) ?? [];
         parsedHeaders = hdrs;
         parsedRows = lines.slice(1).map(line => {
