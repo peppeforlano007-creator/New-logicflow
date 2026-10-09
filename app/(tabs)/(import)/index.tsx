@@ -54,6 +54,22 @@ const MAPPING_FIELDS = [
 
 type MappingKey = typeof MAPPING_FIELDS[number]['key'];
 
+/**
+ * Look up a value in a row object using a trim+lowercase-safe key match.
+ * Handles Excel column headers that have leading/trailing spaces.
+ */
+function getRowValue(row: Record<string, any>, colName: string | null): string | null {
+  if (!colName) return null;
+  const normalizedTarget = colName.trim().toLowerCase();
+  // First try exact match (fast path)
+  if (row[colName] != null) return String(row[colName]);
+  // Then try trimmed exact match
+  if (row[colName.trim()] != null) return String(row[colName.trim()]);
+  // Finally try case+trim insensitive scan
+  const key = Object.keys(row).find(k => k.trim().toLowerCase() === normalizedTarget);
+  return key != null ? String(row[key]) : null;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function AnimatedListItem({ index, children }: { index: number; children: React.ReactNode }) {
@@ -376,10 +392,11 @@ export default function ImportScreen() {
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
         const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-        parsedHeaders = jsonRows.length > 0 ? Object.keys(jsonRows[0]) : [];
+        // Trim keys to strip leading/trailing spaces from Excel column headers
+        parsedHeaders = jsonRows.length > 0 ? Object.keys(jsonRows[0]).map(k => k.trim()) : [];
         parsedRows = jsonRows.map(row => {
           const obj: Record<string, string> = {};
-          for (const k of Object.keys(row)) obj[k] = String(row[k] ?? '');
+          for (const k of Object.keys(row)) obj[k.trim()] = String(row[k] ?? '');
           return obj;
         });
         console.log('[Import] Local XLSX parse complete — rows:', parsedRows.length, '| headers:', parsedHeaders);
@@ -430,30 +447,33 @@ export default function ImportScreen() {
         // Build normalized original_data — keep all original columns, add standard keys on top
         const normalized: Record<string, string> = { ...row };
 
-        if (mappings.lpn && row[mappings.lpn] != null)
-          normalized['LPN'] = String(row[mappings.lpn]);
-        if (mappings.asin && row[mappings.asin] != null)
-          normalized['ASIN'] = String(row[mappings.asin]);
-        if (mappings.pkgid && row[mappings.pkgid] != null)
-          normalized['PkgID'] = String(row[mappings.pkgid]);
-        if (mappings.amazonprice && row[mappings.amazonprice] != null)
-          normalized['AmazonPrice'] = String(row[mappings.amazonprice]);
-        if (mappings.descrizione && row[mappings.descrizione] != null)
-          normalized['Title'] = String(row[mappings.descrizione]);
-        if (mappings.adjreason && row[mappings.adjreason] != null)
-          normalized['AdjReason'] = String(row[mappings.adjreason]);
+        const lpnVal = getRowValue(row, mappings.lpn);
+        if (lpnVal != null) normalized['LPN'] = lpnVal;
 
-        const qty = mappings.quantita
-          ? Math.max(1, parseInt(String(row[mappings.quantita] ?? '1'), 10) || 1)
-          : 1;
+        const asinVal = getRowValue(row, mappings.asin);
+        if (asinVal != null) normalized['ASIN'] = asinVal;
 
-        const unitRecovery = mappings.unitrecovery
-          ? parseFloat(String(row[mappings.unitrecovery] ?? '0')) || null
-          : null;
+        const pkgidVal = getRowValue(row, mappings.pkgid);
+        if (pkgidVal != null) normalized['PkgID'] = pkgidVal;
+
+        const amazonPriceVal = getRowValue(row, mappings.amazonprice);
+        if (amazonPriceVal != null) normalized['AmazonPrice'] = amazonPriceVal;
+
+        const descrizioneVal = getRowValue(row, mappings.descrizione);
+        if (descrizioneVal != null) normalized['Title'] = descrizioneVal;
+
+        const adjReasonVal = getRowValue(row, mappings.adjreason);
+        if (adjReasonVal != null) normalized['AdjReason'] = adjReasonVal;
+
+        const qtyRaw = getRowValue(row, mappings.quantita);
+        const qty = qtyRaw != null ? Math.max(1, parseInt(qtyRaw.replace(',', '.'), 10) || 1) : 1;
+
+        const unitRecoveryRaw = getRowValue(row, mappings.unitrecovery);
+        const unitRecovery = unitRecoveryRaw != null ? parseFloat(unitRecoveryRaw.replace(',', '.')) || null : null;
 
         // item_code: prefer LPN mapping, then ASIN, then first column
         const codeKey = mappings.lpn ?? mappings.asin ?? headers[0] ?? 'col_0';
-        const itemCode = String(row[codeKey] ?? `ITEM_${idx + 1}`);
+        const itemCode = getRowValue(row, codeKey) ?? `ITEM_${idx + 1}`;
 
         return {
           file_id: fileData.id,
