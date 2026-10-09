@@ -97,8 +97,15 @@ export default function ProdottiScreen() {
     const itemStatus = item.status as 'pending' | 'processing' | 'completed';
     const adjReason = item.extra_data?.AdjReason ?? '';
     const hasAdjReason = adjReason.trim().length > 0;
-    const descKey = Object.keys(item.original_data ?? {}).find(k => k.toLowerCase() === 'itemdesc');
-    const descValue = descKey ? ((item.original_data ?? {})[descKey] || '—') : '—';
+    const od = item.original_data ?? {};
+    const legacyDescKey = Object.keys(od).find(k => k.toLowerCase() === 'itemdesc');
+    const descValue =
+      (od['Title'] as string | undefined) ??
+      (od['title'] as string | undefined) ??
+      (od['descrizione'] as string | undefined) ??
+      (od['Descrizione'] as string | undefined) ??
+      (legacyDescKey ? (od[legacyDescKey] as string | undefined) : undefined) ??
+      '—';
 
     return (
       <AnimatedListItem index={index}>
