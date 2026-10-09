@@ -143,8 +143,8 @@ export default function ScaricaScreen() {
           (od['PkgID'] as string | undefined) ??
           (od['LPN'] as string | undefined) ??
           a.item_code;
-        const descKey = Object.keys(od).find(k => k.toLowerCase() === 'itemdesc');
-        const desc = descKey ? String(od[descKey] ?? '—') : '—';
+        const legacyDescKey = Object.keys(od).find((k: string) => k.toLowerCase() === 'itemdesc');
+        const desc = String(od['Title'] ?? od['title'] ?? od['descrizione'] ?? od['Descrizione'] ?? (legacyDescKey ? (od[legacyDescKey] || '—') : '—'));
 
         // Extract all SKUs (top-level + per-unit)
         const ed = a.extra_data ?? {};
@@ -288,6 +288,19 @@ export default function ScaricaScreen() {
     if (selectedIds.length === 0 || !nuovoLotto) return;
     setConfirming(true);
     try {
+      console.log('[Scarico] fetching current items for', selectedIds.length, 'items');
+      const { data: currentItems, error: fetchErr } = await db
+        .from('supplier_items')
+        .select('id, extra_data, quantita')
+        .in('id', selectedIds);
+      if (fetchErr) throw fetchErr;
+
+      // Build a map of id → quantita for quick lookup
+      const qtaMap: Record<string, number> = {};
+      (currentItems ?? []).forEach((ci: any) => {
+        qtaMap[ci.id] = ci.quantita ?? 1;
+      });
+
       console.log('[Scarico] inserting movimenti:', selectedIds.length);
       const { error: movErr } = await db.from('movimenti').insert(
         selectedIds.map(itemId => ({
@@ -295,16 +308,10 @@ export default function ScaricaScreen() {
           store_id: store_id,
           articolo_id: itemId,
           tipo: 'scarico',
+          quantita: qtaMap[itemId] ?? 1,
         }))
       );
       if (movErr) throw movErr;
-
-      console.log('[Scarico] fetching current extra_data for', selectedIds.length, 'items before update');
-      const { data: currentItems, error: fetchErr } = await db
-        .from('supplier_items')
-        .select('id, extra_data, quantita')
-        .in('id', selectedIds);
-      if (fetchErr) throw fetchErr;
 
       console.log('[Scarico] building extra_data updates for lotto:', nuovoLotto.codice_lotto, 'id:', nuovoLotto.id);
       const updatePromises = (currentItems ?? []).map((ci: { id: string; extra_data: Record<string, unknown> | null; quantita: number | null }) => {
