@@ -61,8 +61,8 @@ function base64ToUtf8Text(b64: string): string {
 // ─── Mapping field definitions ────────────────────────────────────────────────
 
 const MAPPING_FIELDS = [
-  { key: 'lpn',          label: 'LPN',           required: true,  color: '#2563EB', desc: 'Codice univoco per riga — usato per scansione in ricezione e ricerca in cassa' },
-  { key: 'asin',         label: 'ASIN',          required: false, color: '#7C3AED', desc: 'Raggruppamento articoli con stessa identità — usato in lavorazione' },
+  { key: 'lpn',          label: 'LPN',           required: false, color: '#2563EB', desc: 'Codice della singola unità fisica — usato per scansione in ricezione. Almeno LPN o ASIN è obbligatorio.' },
+  { key: 'asin',         label: 'ASIN',          required: false, color: '#7C3AED', desc: 'Codice articolo — raggruppa più unità dello stesso prodotto, usato in lavorazione. Almeno LPN o ASIN è obbligatorio.' },
   { key: 'pkgid',        label: 'PkgID',         required: false, color: '#0891B2', desc: 'Codice collo per ricezione multipla (opzionale)' },
   { key: 'amazonprice',  label: 'Amazon Price',  required: false, color: '#D97706', desc: 'Prezzo Amazon — calcola automaticamente il prezzo A (−35%), B (−50%), C (−70%) in lavorazione' },
   { key: 'descrizione',  label: 'Descrizione',   required: false, color: '#059669', desc: 'Titolo/descrizione articolo — mostrato in lavorazione e nella ricerca cassa' },
@@ -380,9 +380,9 @@ export default function ImportScreen() {
   const handleConfirmImport = useCallback(async () => {
     if (!selectedFile) return;
 
-    if (mappings.lpn === null) {
-      console.log('[Import] handleConfirmImport blocked — LPN column not mapped');
-      showToast('Seleziona almeno la colonna LPN prima di importare', 'error');
+    if (mappings.lpn === null && mappings.asin === null) {
+      console.log('[Import] handleConfirmImport blocked — neither LPN nor ASIN column is mapped');
+      showToast('Seleziona almeno la colonna LPN o ASIN prima di importare', 'error');
       return;
     }
 
@@ -909,6 +909,12 @@ export default function ImportScreen() {
                 </Text>
                 <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>
                   Associa le colonne del file ai campi standard
+                </Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FEF3C7', borderRadius: 8, padding: 10, borderWidth: 1, borderColor: '#F59E0B' }}>
+                <Text style={{ fontSize: 12, color: '#92400E', flex: 1, lineHeight: 16 }}>
+                  ⚠️ Almeno uno tra LPN e ASIN deve essere mappato per procedere con l'importazione.
                 </Text>
               </View>
 
