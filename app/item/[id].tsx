@@ -334,7 +334,13 @@ export default function ItemDetailScreen() {
 
       // ── Lotto reconciliation: if lotto_id on the DB record differs from extra_data,
       //    the item was moved via Scarico and extra_data is stale. Reconcile from DB.
-      const qty = fetchedItem.quantita ?? 1;
+      const qtyTotale = fetchedItem.quantita ?? 1;
+      const eanReceived = (fetchedItem.extra_data as any)?.ean_received_qty;
+      // Usa le unità ricevute se disponibili, altrimenti la quantità totale
+      const qty = (typeof eanReceived === 'number' && eanReceived > 0)
+        ? Math.min(eanReceived, qtyTotale)
+        : qtyTotale;
+      console.log('[ItemDetail] totalUnits calc — qtyTotale:', qtyTotale, 'ean_received_qty:', eanReceived, '→ qty:', qty);
       const dbLottoId = fetchedItem.lotto_id ?? '';
       const extraLottoId = (fetchedItem.extra_data?.['LottoId'] as string | undefined) ?? '';
       const isMultiUnitResuming = qty > 1 && ((fetchedItem.extra_data as any)?.units ?? []).length > 0;
