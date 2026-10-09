@@ -126,6 +126,9 @@ export default function RiconciliazioneScreen() {
   const [showPickerInizio, setShowPickerInizio] = useState(false);
   const [showPickerFine, setShowPickerFine] = useState(false);
 
+  const inputInizioRef = React.useRef<any>(null);
+  const inputFineRef = React.useRef<any>(null);
+
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<RiconciliazioneData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -315,7 +318,14 @@ export default function RiconciliazioneScreen() {
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 6 }}>Dal</Text>
               <TouchableOpacity
-                onPress={() => { console.log('[Riconciliazione] date inizio picker opened'); setShowPickerInizio(true); }}
+                onPress={() => {
+                  console.log('[Riconciliazione] date inizio picker opened');
+                  if (Platform.OS === 'web') {
+                    inputInizioRef.current?.click();
+                  } else {
+                    setShowPickerInizio(true);
+                  }
+                }}
                 style={{
                   backgroundColor: COLORS.surfaceSecondary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11,
                   borderWidth: 1, borderColor: COLORS.border,
@@ -323,12 +333,35 @@ export default function RiconciliazioneScreen() {
                 activeOpacity={0.8}
               >
                 <Text style={{ fontSize: 14, color: COLORS.text, fontWeight: '500' }}>{formatDate(dataInizio)}</Text>
+                {Platform.OS === 'web' && (
+                  <input
+                    ref={inputInizioRef}
+                    type="date"
+                    value={dataInizio.toISOString().split('T')[0]}
+                    max={dataFine.toISOString().split('T')[0]}
+                    onChange={(e: any) => {
+                      if (e.target.value) {
+                        const d = new Date(e.target.value + 'T12:00:00');
+                        console.log('[Riconciliazione] dataInizio changed (web):', d.toISOString());
+                        setDataInizio(d);
+                      }
+                    }}
+                    style={{ position: 'absolute', opacity: 0, width: 1, height: 1, pointerEvents: 'none' }}
+                  />
+                )}
               </TouchableOpacity>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 12, fontWeight: '600', color: COLORS.textSecondary, marginBottom: 6 }}>Al</Text>
               <TouchableOpacity
-                onPress={() => { console.log('[Riconciliazione] date fine picker opened'); setShowPickerFine(true); }}
+                onPress={() => {
+                  console.log('[Riconciliazione] date fine picker opened');
+                  if (Platform.OS === 'web') {
+                    inputFineRef.current?.click();
+                  } else {
+                    setShowPickerFine(true);
+                  }
+                }}
                 style={{
                   backgroundColor: COLORS.surfaceSecondary, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 11,
                   borderWidth: 1, borderColor: COLORS.border,
@@ -336,6 +369,23 @@ export default function RiconciliazioneScreen() {
                 activeOpacity={0.8}
               >
                 <Text style={{ fontSize: 14, color: COLORS.text, fontWeight: '500' }}>{formatDate(dataFine)}</Text>
+                {Platform.OS === 'web' && (
+                  <input
+                    ref={inputFineRef}
+                    type="date"
+                    value={dataFine.toISOString().split('T')[0]}
+                    min={dataInizio.toISOString().split('T')[0]}
+                    max={new Date().toISOString().split('T')[0]}
+                    onChange={(e: any) => {
+                      if (e.target.value) {
+                        const d = new Date(e.target.value + 'T12:00:00');
+                        console.log('[Riconciliazione] dataFine changed (web):', d.toISOString());
+                        setDataFine(d);
+                      }
+                    }}
+                    style={{ position: 'absolute', opacity: 0, width: 1, height: 1, pointerEvents: 'none' }}
+                  />
+                )}
               </TouchableOpacity>
             </View>
           </View>
