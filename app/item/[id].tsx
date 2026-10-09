@@ -467,6 +467,7 @@ export default function ItemDetailScreen() {
             } : {}),
           },
           original_data: updatedOriginalData,
+          lotto_id: selectedLottoId ?? null,
           status: isLastUnit ? 'completed' : 'processing',
           processed_at: isLastUnit ? new Date().toISOString() : (item?.processed_at ?? null),
           processed_by: isLastUnit ? (user?.username || null) : (item?.processed_by ?? null),
