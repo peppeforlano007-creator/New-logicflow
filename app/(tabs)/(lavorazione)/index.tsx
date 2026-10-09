@@ -169,7 +169,7 @@ export default function LavorazioneScreen() {
   }, [navigateIfSingleMatch]);
 
   const handleItemPress = useCallback((item: ItemWithFile) => {
-    const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
+    const identifier = item.original_data?.['LPN'] ?? item.original_data?.['PkgID'] ?? item.item_code;
     console.log('[Lavorazione] item pressed:', { id: item.id, identifier, quantita_disponibile: item.quantita_disponibile });
     router.push(`/item/${item.id}` as any);
   }, [router]);
@@ -177,15 +177,19 @@ export default function LavorazioneScreen() {
   // ── Render helpers ────────────────────────────────────────────────────────
 
   const renderItem = useCallback(({ item, index }: { item: ItemWithFile; index: number }) => {
-    const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
+    // Prefer standard keys: LPN first, then PkgID, then item_code
+    const identifier = item.original_data?.['LPN'] ?? item.original_data?.['PkgID'] ?? item.item_code;
     const fileName = item.supplier_files?.file_name ?? '—';
     const itemStatus = item.status as 'pending' | 'processing' | 'completed';
     const isCompleted = item.status === 'completed';
     const qtaDisp = item.quantita_disponibile ?? 1;
     const showQtyBadge = qtaDisp > 1;
 
+    // Use standard Title key, fallback to legacy itemdesc auto-detection, then item_code
     const descValue = (() => {
       const data = item.original_data ?? {};
+      if (data['Title']) return data['Title'];
+      if (data['title']) return data['title'];
       const key = Object.keys(data).find(k => k.toLowerCase() === 'itemdesc');
       return key ? (data[key] || '—') : '—';
     })();

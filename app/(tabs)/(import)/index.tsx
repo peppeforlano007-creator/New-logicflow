@@ -24,6 +24,23 @@ import { readFileAsBase64 } from '@/utils/fileHelpers';
 import { SUPABASE_PROJECT_URL as SUPABASE_URL, SUPABASE_ANON_TOKEN as SUPABASE_ANON_KEY } from '@/constants/supabase';
 import type { SupplierFile } from '@/types';
 
+// ─── Mapping field definitions ────────────────────────────────────────────────
+
+const MAPPING_FIELDS = [
+  { key: 'lpn',          label: 'LPN',           required: true,  color: '#2563EB', desc: 'Codice univoco per riga — usato per scansione in ricezione e ricerca in cassa' },
+  { key: 'asin',         label: 'ASIN',          required: false, color: '#7C3AED', desc: 'Raggruppamento articoli con stessa identità — usato in lavorazione' },
+  { key: 'pkgid',        label: 'PkgID',         required: false, color: '#0891B2', desc: 'Codice collo per ricezione multipla (opzionale)' },
+  { key: 'amazonprice',  label: 'Amazon Price',  required: true,  color: '#D97706', desc: 'Prezzo Amazon — calcola automaticamente il prezzo A (−35%), B (−50%), C (−70%) in lavorazione' },
+  { key: 'descrizione',  label: 'Descrizione',   required: false, color: '#059669', desc: 'Titolo/descrizione articolo — mostrato in lavorazione e nella ricerca cassa' },
+  { key: 'adjreason',    label: 'AdjReason',     required: false, color: '#DC2626', desc: 'Motivo anomalia — usato nell\'export per articoli non ricevuti' },
+  { key: 'quantita',     label: 'Quantità',      required: false, color: '#6B7280', desc: 'Numero di unità per riga — lascia vuoto se ogni riga è 1 articolo' },
+  { key: 'unitrecovery', label: 'Unit Recovery', required: false, color: '#B45309', desc: 'Costo unitario di recupero — salvato per analisi di redditività future' },
+] as const;
+
+type MappingKey = typeof MAPPING_FIELDS[number]['key'];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function AnimatedListItem({ index, children }: { index: number; children: React.ReactNode }) {
   const opacity = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(12)).current;
@@ -63,9 +80,27 @@ function formatDate(dateStr: string): string {
   });
 }
 
+/** Returns true if the column header is a likely auto-match for the given mapping key */
+function isAutoMatch(colHeader: string, fieldKey: MappingKey): boolean {
+  const lower = colHeader.toLowerCase();
+  switch (fieldKey) {
+    case 'lpn':          return lower.includes('lpn') || lower.includes('fnsku');
+    case 'asin':         return lower.includes('asin');
+    case 'pkgid':        return lower.includes('pkgid') || lower.includes('pkg_id') || lower.includes('pkg id');
+    case 'amazonprice':  return lower.includes('amazonprice') || lower.includes('amazon price') || lower.includes('amazon_price');
+    case 'descrizione':  return lower.includes('title') || lower.includes('descrizione') || lower.includes('description') || lower.includes('itemdesc');
+    case 'adjreason':    return lower.includes('adjreason') || lower.includes('adj_reason') || lower.includes('adj reason');
+    case 'quantita':     return lower.includes('quantit') || lower.includes('qty') || lower.includes('quantity');
+    case 'unitrecovery': return lower.includes('unitrecovery') || lower.includes('unit_recovery') || lower.includes('unit recovery');
+    default:             return false;
+  }
+}
+
 interface FileWithCount extends SupplierFile {
   item_count?: number;
 }
+
+// ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function ImportScreen() {
   const router = useRouter();
@@ -84,10 +119,33 @@ export default function ImportScreen() {
   const [importing, setImporting] = useState(false);
   const [previewRows, setPreviewRows] = useState(0);
   const [previewCols, setPreviewCols] = useState<string[]>([]);
-  const [quantitaColumn, setQuantitaColumn] = useState<string | null>(null);
-  const [showQtyPicker, setShowQtyPicker] = useState(false);
-  const [identificatoreColumn, setIdentificatoreColumn] = useState<string | null>(null);
-  const [showIdentPicker, setShowIdentPicker] = useState(false);
+
+  // 8-field mapping state
+  const [mappings, setMappings] = useState<Record<MappingKey, string | null>>({
+    lpn: null,
+    asin: null,
+    pkgid: null,
+    amazonprice: null,
+    descrizione: null,
+    adjreason: null,
+    quantita: null,
+    unitrecovery: null,
+  });
+  const [activePicker, setActivePicker] = useState<MappingKey | null>(null);
+
+  const resetMappings = useCallback(() => {
+    setMappings({
+      lpn: null,
+      asin: null,
+      pkgid: null,
+      amazonprice: null,
+      descrizione: null,
+      adjreason: null,
+      quantita: null,
+      unitrecovery: null,
+    });
+    setActivePicker(null);
+  }, []);
 
   const fetchFiles = useCallback(async () => {
     console.log('[Import] fetchFiles called');
@@ -151,7 +209,7 @@ export default function ImportScreen() {
       setSelectedFile(asset);
       setPreviewRows(0);
       setPreviewCols([]);
-      setQuantitaColumn(null);
+      resetMappings();
       setModalVisible(true);
 
       // Quick preview: read base64 and call edge function for preview
@@ -183,11 +241,15 @@ export default function ImportScreen() {
       console.error('[Import] handlePickFile error:', err);
       showToast('Errore nella selezione del file', 'error');
     }
-  }, [showToast]);
+  }, [showToast, resetMappings]);
 
   const handleConfirmImport = useCallback(async () => {
     if (!selectedFile) return;
-    console.log('[Import] handleConfirmImport called', { fileName: selectedFile.name, importedBy, quantitaColumn, identificatoreColumn });
+    console.log('[Import] handleConfirmImport called', {
+      fileName: selectedFile.name,
+      importedBy,
+      mappings,
+    });
 
     setImporting(true);
 
@@ -231,7 +293,7 @@ export default function ImportScreen() {
 
       const format = selectedFile.name.toLowerCase().endsWith('.csv') ? 'csv' : 'xlsx';
 
-      // Save supplier_file
+      // Save supplier_file with all mapping columns
       const { data: fileData, error: fileError } = await db
         .from('supplier_files')
         .insert({
@@ -241,7 +303,15 @@ export default function ImportScreen() {
           extra_columns: [],
           imported_by: importedBy || null,
           status: 'imported',
-          identificatore_column: identificatoreColumn ?? null,
+          // Keep identificatore_column for backward compat (use lpn mapping)
+          identificatore_column: mappings.lpn ?? null,
+          lpn_column: mappings.lpn,
+          asin_column: mappings.asin,
+          pkgid_column: mappings.pkgid,
+          amazonprice_column: mappings.amazonprice,
+          descrizione_column: mappings.descrizione,
+          adjreason_column: mappings.adjreason,
+          quantita_column: mappings.quantita,
         })
         .select()
         .single();
@@ -253,36 +323,56 @@ export default function ImportScreen() {
 
       console.log('[Import] supplier_file created:', fileData.id);
 
-      // Save items
+      // Save items with normalization
       const rows: Record<string, string>[] = parsed.rows ?? [];
       const headers: string[] = parsed.column_headers ?? [];
 
-      const codeKeys = ['codice', 'code', 'cod', 'item_code', 'sku', 'articolo'];
-      const codeKey = identificatoreColumn
-        ?? headers.find(h => codeKeys.includes(h.toLowerCase()))
-        ?? headers[0]
-        ?? 'col_0';
-
-      console.log('[Import] quantitaColumn selected:', quantitaColumn);
+      console.log('[Import] Building normalized items — mappings:', mappings);
 
       const items = rows.map((row, idx) => {
-        const qty = quantitaColumn
-          ? Math.max(1, parseInt(String(row[quantitaColumn] ?? '1'), 10) || 1)
+        // Build normalized original_data — keep all original columns, add standard keys on top
+        const normalized: Record<string, string> = { ...row };
+
+        if (mappings.lpn && row[mappings.lpn] != null)
+          normalized['LPN'] = String(row[mappings.lpn]);
+        if (mappings.asin && row[mappings.asin] != null)
+          normalized['ASIN'] = String(row[mappings.asin]);
+        if (mappings.pkgid && row[mappings.pkgid] != null)
+          normalized['PkgID'] = String(row[mappings.pkgid]);
+        if (mappings.amazonprice && row[mappings.amazonprice] != null)
+          normalized['AmazonPrice'] = String(row[mappings.amazonprice]);
+        if (mappings.descrizione && row[mappings.descrizione] != null)
+          normalized['Title'] = String(row[mappings.descrizione]);
+        if (mappings.adjreason && row[mappings.adjreason] != null)
+          normalized['AdjReason'] = String(row[mappings.adjreason]);
+
+        const qty = mappings.quantita
+          ? Math.max(1, parseInt(String(row[mappings.quantita] ?? '1'), 10) || 1)
           : 1;
+
+        const unitRecovery = mappings.unitrecovery
+          ? parseFloat(String(row[mappings.unitrecovery] ?? '0')) || null
+          : null;
+
+        // item_code: prefer LPN mapping, then ASIN, then first column
+        const codeKey = mappings.lpn ?? mappings.asin ?? headers[0] ?? 'col_0';
+        const itemCode = String(row[codeKey] ?? `ITEM_${idx + 1}`);
+
         return {
           file_id: fileData.id,
           row_index: idx,
-          item_code: String(row[codeKey] ?? row[Object.keys(row)[0]] ?? `ITEM_${idx + 1}`),
-          original_data: row,
+          item_code: itemCode,
+          original_data: normalized,
           extra_data: {},
           status: 'pending' as const,
           quantita: qty,
           quantita_disponibile: qty,
+          unit_recovery: unitRecovery,
         };
       });
 
       if (items.length > 0) {
-        console.log('[Import] Inserting', items.length, 'items with quantita column:', quantitaColumn ?? 'none (default 1)');
+        console.log('[Import] Inserting', items.length, 'normalized items — lpn_column:', mappings.lpn ?? 'none', '| quantita_column:', mappings.quantita ?? 'none (default 1)');
         const { error: itemsError } = await db.from('supplier_items').insert(items);
         if (itemsError) {
           console.error('[Import] insert supplier_items error:', itemsError);
@@ -294,8 +384,7 @@ export default function ImportScreen() {
       setModalVisible(false);
       setSelectedFile(null);
       setImportedBy('');
-      setQuantitaColumn(null);
-      setIdentificatoreColumn(null);
+      resetMappings();
       showToast(`File importato con successo (${items.length} articoli)`, 'success');
       fetchFiles();
     } catch (err: any) {
@@ -304,7 +393,7 @@ export default function ImportScreen() {
     } finally {
       setImporting(false);
     }
-  }, [selectedFile, importedBy, quantitaColumn, identificatoreColumn, fetchFiles, showToast]);
+  }, [selectedFile, importedBy, mappings, fetchFiles, showToast, resetMappings]);
 
   const handleDeleteFile = useCallback((fileId: string, fileName: string) => {
     console.log('[Import] handleDeleteFile called', { fileId, fileName });
@@ -446,9 +535,8 @@ export default function ImportScreen() {
     </View>
   );
 
-  // Quantity column picker options
-  const qtyOptions = ['Nessuna (default 1)', ...previewCols];
-  const qtyLabel = quantitaColumn ?? 'Nessuna (default 1)';
+  // Active picker field definition
+  const activeField = activePicker ? MAPPING_FIELDS.find(f => f.key === activePicker) : null;
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -509,8 +597,7 @@ export default function ImportScreen() {
         onRequestClose={() => {
           console.log('[Import] Modal closed');
           setModalVisible(false);
-          setQuantitaColumn(null);
-          setIdentificatoreColumn(null);
+          resetMappings();
         }}
       >
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -534,8 +621,7 @@ export default function ImportScreen() {
               onPress={() => {
                 console.log('[Import] Modal dismiss button pressed');
                 setModalVisible(false);
-                setQuantitaColumn(null);
-                setIdentificatoreColumn(null);
+                resetMappings();
               }}
             >
               <View
@@ -647,70 +733,103 @@ export default function ImportScreen() {
               />
             </View>
 
-            {/* Colonna Quantità */}
-            <View style={{ gap: 6 }}>
-              <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.text }}>
-                Colonna Quantità
-              </Text>
-              <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>
-                Seleziona la colonna che contiene le quantità (opzionale)
-              </Text>
-              <TouchableOpacity
-                onPress={() => {
-                  console.log('[Import] Colonna Quantità picker opened, previewCols:', previewCols);
-                  setShowQtyPicker(true);
-                }}
-                activeOpacity={0.8}
-                style={{
-                  backgroundColor: COLORS.surface,
-                  borderRadius: 12,
-                  borderWidth: 1,
-                  borderColor: quantitaColumn ? COLORS.primary : COLORS.border,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                }}
-              >
-                <Text style={{ fontSize: 15, color: quantitaColumn ? COLORS.text : COLORS.textTertiary }}>
-                  {qtyLabel}
+            {/* Column Mappings */}
+            <View style={{ gap: 10 }}>
+              <View style={{ gap: 2 }}>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.text }}>
+                  Mappatura Colonne
                 </Text>
-                <ChevronDown size={16} color={COLORS.textSecondary} />
-              </TouchableOpacity>
-            </View>
+                <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>
+                  Associa le colonne del file ai campi standard
+                </Text>
+              </View>
 
-            {/* Colonna Identificatore */}
-            <View style={{ gap: 6 }}>
-              <Text style={{ fontSize: 13, fontWeight: '600', color: COLORS.text }}>
-                Colonna Identificatore
-              </Text>
-              <Text style={{ fontSize: 12, color: COLORS.textSecondary }}>
-                Colonna usata come codice univoco articolo (EAN, LPN, SKU…)
-              </Text>
-              <TouchableOpacity
-                onPress={() => {
-                  console.log('[Import] Colonna Identificatore picker opened, previewCols:', previewCols);
-                  setShowIdentPicker(true);
-                }}
-                activeOpacity={0.8}
+              <View
                 style={{
                   backgroundColor: COLORS.surface,
-                  borderRadius: 12,
+                  borderRadius: 14,
                   borderWidth: 1,
-                  borderColor: identificatoreColumn ? COLORS.primary : COLORS.border,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
+                  borderColor: COLORS.border,
+                  overflow: 'hidden',
                 }}
               >
-                <Text style={{ fontSize: 15, color: identificatoreColumn ? COLORS.text : COLORS.textTertiary }}>
-                  {identificatoreColumn ?? 'Auto-rileva'}
-                </Text>
-                <ChevronDown size={16} color={COLORS.textSecondary} />
-              </TouchableOpacity>
+                {MAPPING_FIELDS.map((field, idx) => {
+                  const selectedCol = mappings[field.key];
+                  const isLast = idx === MAPPING_FIELDS.length - 1;
+                  const requiredLabel = field.required ? '(obbligatorio)' : '(opzionale)';
+                  const chipLabel = selectedCol ?? 'Seleziona...';
+                  const hasValue = selectedCol !== null;
+
+                  return (
+                    <View
+                      key={field.key}
+                      style={{
+                        borderBottomWidth: isLast ? 0 : 1,
+                        borderBottomColor: COLORS.border,
+                        padding: 14,
+                        gap: 8,
+                      }}
+                    >
+                      {/* Top row: dot + label + required badge */}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <View style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 5,
+                          backgroundColor: field.color,
+                          flexShrink: 0,
+                        }} />
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: COLORS.text }}>
+                          {field.label}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: COLORS.textTertiary }}>
+                          {requiredLabel}
+                        </Text>
+                      </View>
+
+                      {/* Description */}
+                      <Text style={{ fontSize: 12, color: COLORS.textSecondary, lineHeight: 16 }}>
+                        {field.desc}
+                      </Text>
+
+                      {/* Chip */}
+                      <TouchableOpacity
+                        onPress={() => {
+                          console.log('[Import] Mapping picker opened for field:', field.key, '| previewCols:', previewCols);
+                          setActivePicker(field.key);
+                        }}
+                        activeOpacity={0.8}
+                        style={{
+                          backgroundColor: hasValue ? COLORS.primaryMuted : COLORS.background,
+                          borderRadius: 10,
+                          borderWidth: 1,
+                          borderColor: hasValue ? field.color : COLORS.border,
+                          paddingHorizontal: 12,
+                          paddingVertical: 9,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          alignSelf: 'flex-start',
+                          minWidth: 160,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 13,
+                            fontWeight: hasValue ? '600' : '400',
+                            color: hasValue ? field.color : COLORS.textTertiary,
+                            flex: 1,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {chipLabel}
+                        </Text>
+                        <ChevronDown size={14} color={hasValue ? field.color : COLORS.textTertiary} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </View>
             </View>
 
             {/* Confirm button */}
@@ -744,12 +863,15 @@ export default function ImportScreen() {
         </View>
       </Modal>
 
-      {/* Quantity Column Picker Modal */}
+      {/* Column Picker Modal (shared for all 8 fields) */}
       <Modal
-        visible={showQtyPicker}
+        visible={activePicker !== null}
         animationType="slide"
         presentationStyle="formSheet"
-        onRequestClose={() => setShowQtyPicker(false)}
+        onRequestClose={() => {
+          console.log('[Import] column picker dismissed for field:', activePicker);
+          setActivePicker(null);
+        }}
       >
         <View style={{ flex: 1, backgroundColor: COLORS.background }}>
           <View style={{
@@ -758,96 +880,81 @@ export default function ImportScreen() {
             borderBottomWidth: 1, borderBottomColor: COLORS.border,
             backgroundColor: COLORS.surface,
           }}>
-            <Text style={{ fontSize: 17, fontWeight: '700', color: COLORS.text }}>Colonna Quantità</Text>
-            <AnimatedPressable onPress={() => { console.log('[Import] qty picker dismissed'); setShowQtyPicker(false); }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {activeField && (
+                <View style={{
+                  width: 10, height: 10, borderRadius: 5,
+                  backgroundColor: activeField.color,
+                }} />
+              )}
+              <Text style={{ fontSize: 17, fontWeight: '700', color: COLORS.text }}>
+                {activeField?.label ?? 'Seleziona colonna'}
+              </Text>
+            </View>
+            <AnimatedPressable onPress={() => {
+              console.log('[Import] column picker dismissed for field:', activePicker);
+              setActivePicker(null);
+            }}>
               <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.surfaceSecondary, alignItems: 'center', justifyContent: 'center' }}>
                 <X size={16} color={COLORS.textSecondary} />
               </View>
             </AnimatedPressable>
           </View>
+
+          {activeField && (
+            <Text style={{ fontSize: 12, color: COLORS.textSecondary, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4, lineHeight: 16 }}>
+              {activeField.desc}
+            </Text>
+          )}
+
           <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-            {qtyOptions.map(opt => {
-              const isNone = opt === 'Nessuna (default 1)';
-              const isSelected = isNone ? quantitaColumn === null : quantitaColumn === opt;
+            {/* Nessuna option */}
+            {(() => {
+              const isNoneSelected = activePicker !== null && mappings[activePicker] === null;
               return (
                 <TouchableOpacity
-                  key={opt}
                   onPress={() => {
-                    const val = isNone ? null : opt;
-                    console.log('[Import] quantitaColumn selected:', val);
-                    setQuantitaColumn(val);
-                    setShowQtyPicker(false);
+                    console.log('[Import] mapping cleared for field:', activePicker);
+                    if (activePicker) {
+                      setMappings(prev => ({ ...prev, [activePicker]: null }));
+                    }
+                    setActivePicker(null);
                   }}
                   activeOpacity={0.8}
                   style={{
-                    backgroundColor: isSelected ? COLORS.primaryMuted : COLORS.surface,
+                    backgroundColor: isNoneSelected ? COLORS.primaryMuted : COLORS.surface,
                     borderRadius: 12,
                     padding: 14,
                     marginBottom: 8,
                     borderWidth: 1,
-                    borderColor: isSelected ? COLORS.primary : COLORS.border,
+                    borderColor: isNoneSelected ? COLORS.primary : COLORS.border,
                     flexDirection: 'row',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                   }}
                 >
-                  <Text style={{ fontSize: 15, fontWeight: isSelected ? '600' : '400', color: isSelected ? COLORS.primary : COLORS.text }}>
-                    {opt}
+                  <Text style={{ fontSize: 15, fontWeight: isNoneSelected ? '600' : '400', color: isNoneSelected ? COLORS.primary : COLORS.textSecondary }}>
+                    Nessuna
                   </Text>
-                  {isSelected && <Check size={16} color={COLORS.primary} />}
+                  {isNoneSelected && <Check size={16} color={COLORS.primary} />}
                 </TouchableOpacity>
               );
-            })}
-          </ScrollView>
-        </View>
-      </Modal>
+            })()}
 
-      {/* Identificatore Column Picker Modal */}
-      <Modal
-        visible={showIdentPicker}
-        animationType="slide"
-        presentationStyle="formSheet"
-        onRequestClose={() => setShowIdentPicker(false)}
-      >
-        <View style={{ flex: 1, backgroundColor: COLORS.background }}>
-          <View style={{
-            flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-            padding: 20, paddingTop: 24,
-            borderBottomWidth: 1, borderBottomColor: COLORS.border,
-            backgroundColor: COLORS.surface,
-          }}>
-            <Text style={{ fontSize: 17, fontWeight: '700', color: COLORS.text }}>Colonna Identificatore</Text>
-            <AnimatedPressable onPress={() => { console.log('[Import] ident picker dismissed'); setShowIdentPicker(false); }}>
-              <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: COLORS.surfaceSecondary, alignItems: 'center', justifyContent: 'center' }}>
-                <X size={16} color={COLORS.textSecondary} />
-              </View>
-            </AnimatedPressable>
-          </View>
-          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
-            {['Auto-rileva', ...previewCols].map(opt => {
-              const isAuto = opt === 'Auto-rileva';
-              const isSelected = isAuto ? identificatoreColumn === null : identificatoreColumn === opt;
-              const lowerOpt = opt.toLowerCase();
-              const badgeLabel = lowerOpt.includes('ean') ? 'EAN'
-                : lowerOpt.includes('lpn') ? 'LPN'
-                : lowerOpt.includes('sku') ? 'SKU'
-                : lowerOpt.includes('barcode') ? 'BARCODE'
-                : lowerOpt.includes('codice') ? 'CODICE'
-                : null;
-              const badgeColor = badgeLabel === 'EAN' ? '#16A34A'
-                : badgeLabel === 'LPN' ? '#2563EB'
-                : '#6B7280';
-              const badgeBg = badgeLabel === 'EAN' ? '#DCFCE7'
-                : badgeLabel === 'LPN' ? '#DBEAFE'
-                : '#F3F4F6';
+            {/* Column options */}
+            {previewCols.map(col => {
+              const isSelected = activePicker !== null && mappings[activePicker] === col;
+              const isMatch = activePicker !== null && isAutoMatch(col, activePicker);
+
               return (
                 <TouchableOpacity
-                  key={opt}
+                  key={col}
                   onPress={() => {
-                    const val = isAuto ? null : opt;
-                    console.log('[Import] identificatoreColumn selected:', val);
-                    setIdentificatoreColumn(val);
-                    setShowIdentPicker(false);
+                    console.log('[Import] mapping set — field:', activePicker, '→ column:', col);
+                    if (activePicker) {
+                      setMappings(prev => ({ ...prev, [activePicker]: col }));
+                    }
+                    setActivePicker(null);
                   }}
                   activeOpacity={0.8}
                   style={{
@@ -862,17 +969,33 @@ export default function ImportScreen() {
                     justifyContent: 'space-between',
                   }}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={{ fontSize: 15, fontWeight: isSelected ? '600' : '400', color: isSelected ? COLORS.primary : COLORS.text }}>
-                      {opt}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                    <Text style={{
+                      fontSize: 15,
+                      fontWeight: isSelected ? '600' : '400',
+                      color: isSelected ? COLORS.primary : COLORS.text,
+                      flex: 1,
+                    }} numberOfLines={1}>
+                      {col}
                     </Text>
-                    {badgeLabel && !isAuto ? (
-                      <View style={{ backgroundColor: badgeBg, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
-                        <Text style={{ fontSize: 11, fontWeight: '600', color: badgeColor }}>
-                          {badgeLabel}
+                    {isMatch && !isSelected && (
+                      <View style={{
+                        backgroundColor: activeField ? `${activeField.color}20` : COLORS.primaryMuted,
+                        borderRadius: 6,
+                        paddingHorizontal: 7,
+                        paddingVertical: 2,
+                        borderWidth: 1,
+                        borderColor: activeField ? `${activeField.color}40` : COLORS.primary,
+                      }}>
+                        <Text style={{
+                          fontSize: 10,
+                          fontWeight: '700',
+                          color: activeField?.color ?? COLORS.primary,
+                        }}>
+                          Match
                         </Text>
                       </View>
-                    ) : null}
+                    )}
                   </View>
                   {isSelected && <Check size={16} color={COLORS.primary} />}
                 </TouchableOpacity>

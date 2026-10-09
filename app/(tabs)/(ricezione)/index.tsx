@@ -108,7 +108,7 @@ export default function RicezioneScreen() {
   const [sessionLog, setSessionLog] = useState<SessionLogEntry[]>([]);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [bannerType, setBannerType] = useState<'error' | 'warning'>('error');
-  const [selectedColumn, setSelectedColumn] = useState<'PkgID' | 'LPN'>('PkgID');
+  const [selectedColumn, setSelectedColumn] = useState<'PkgID' | 'LPN'>('LPN');
   const errorBannerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bannerOpacity = useRef(new Animated.Value(0)).current;
   const inputRef = useRef<TextInput>(null);
@@ -239,12 +239,13 @@ export default function RicezioneScreen() {
         }
 
         // Query DB directly for matching items — include quantita fields
+        // Search across standard keys: item_code, LPN, ASIN, PkgID, and extra_data SKU
         console.log('[Ricezione] Querying DB for code:', trimmed, '| column:', selectedColumn, '| fileIds:', activeFileIds.length);
         const { data: matchedRaw, error: searchError } = await db
           .from('supplier_items')
           .select('id, file_id, item_code, original_data, extra_data, status, quantita, quantita_disponibile')
           .in('file_id', activeFileIds)
-          .eq(`original_data->>${selectedColumn}`, trimmed);
+          .or(`item_code.eq.${trimmed},original_data->>LPN.eq.${trimmed},original_data->>ASIN.eq.${trimmed},original_data->>PkgID.eq.${trimmed},extra_data->>SKU.eq.${trimmed}`);
 
         if (searchError) {
           console.error('[Ricezione] processCode search error:', searchError);

@@ -196,9 +196,10 @@ export default function CassaScreen() {
       }[])
         .filter(item => (item.quantita_disponibile ?? 1) > 0)
         .map(item => {
-          const identifier = item.original_data?.['PkgID'] ?? item.original_data?.['LPN'] ?? item.item_code;
-          const descKey = Object.keys(item.original_data ?? {}).find((k: string) => k.toLowerCase() === 'itemdesc');
-          const desc = descKey ? ((item.original_data ?? {})[descKey] || '—') : '—';
+          const identifier = item.original_data?.['LPN'] ?? item.original_data?.['PkgID'] ?? item.item_code;
+          const origData = item.original_data ?? {};
+          const legacyDescKey = Object.keys(origData).find((k: string) => k.toLowerCase() === 'itemdesc');
+          const desc = origData['Title'] ?? origData['title'] ?? origData['descrizione'] ?? origData['Descrizione'] ?? (legacyDescKey ? (origData[legacyDescKey] || '—') : '—');
           const prezzo = extractPrezzo(item.extra_data ?? {});
           const lotto_codice = item.lotto_id ? (lottiMap[item.lotto_id] ?? '—') : '—';
           const qtaDisp = item.quantita_disponibile ?? 1;
@@ -251,7 +252,7 @@ export default function CassaScreen() {
       const { data, error } = await db
         .from('supplier_items')
         .select('id, item_code, original_data, extra_data, lotto_id, status, quantita_disponibile')
-        .or(`item_code.eq.${trimmed},original_data->>LPN.eq.${trimmed},extra_data->>SKU.eq.${trimmed}`)
+        .or(`item_code.eq.${trimmed},original_data->>LPN.eq.${trimmed},original_data->>ASIN.eq.${trimmed},original_data->>PkgID.eq.${trimmed},extra_data->>SKU.eq.${trimmed}`)
         .limit(1)
         .single();
 
@@ -303,9 +304,10 @@ export default function CassaScreen() {
         return;
       }
 
-      const identifier = data.original_data?.['PkgID'] ?? data.original_data?.['LPN'] ?? data.item_code;
-      const descKey = Object.keys(data.original_data ?? {}).find((k: string) => k.toLowerCase() === 'itemdesc');
-      const desc = descKey ? ((data.original_data ?? {})[descKey] || '—') : '—';
+      const identifier = data.original_data?.['LPN'] ?? data.original_data?.['PkgID'] ?? data.item_code;
+      const origData = data.original_data ?? {};
+      const legacyDescKey = Object.keys(origData).find((k: string) => k.toLowerCase() === 'itemdesc');
+      const desc = origData['Title'] ?? origData['title'] ?? origData['descrizione'] ?? origData['Descrizione'] ?? (legacyDescKey ? (origData[legacyDescKey] || '—') : '—');
       const prezzo = extractPrezzo(data.extra_data ?? {});
 
       if (cart.some(i => i.id === data.id)) {

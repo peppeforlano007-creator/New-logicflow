@@ -10,6 +10,16 @@ export interface SupplierFile {
   completed_at: string | null;
   imported_by: string | null;
   notes: string | null;
+  // Legacy column selector (kept for backward compat)
+  identificatore_column?: string | null;
+  // Standardized column mappings
+  lpn_column?: string | null;
+  asin_column?: string | null;
+  pkgid_column?: string | null;
+  amazonprice_column?: string | null;
+  descrizione_column?: string | null;
+  adjreason_column?: string | null;
+  quantita_column?: string | null;
 }
 
 export interface SupplierItem {
@@ -23,6 +33,9 @@ export interface SupplierItem {
   processed_at: string | null;
   processed_by: string | null;
   created_at: string;
+  quantita?: number;
+  quantita_disponibile?: number;
+  unit_recovery?: number | null;
 }
 
 export interface ReceptionLog {
