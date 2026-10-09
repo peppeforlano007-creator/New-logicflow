@@ -20,7 +20,7 @@ import type { SupplierItem } from '@/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type ToggleColumn = 'PkgID' | 'LPN';
+type ToggleColumn = 'PkgID' | 'LPN' | 'EAN';
 
 interface ItemWithFile extends SupplierItem {
   supplier_files: {
@@ -124,6 +124,13 @@ export default function LavorazioneScreen() {
   const filteredItems = searchQuery.trim() === ''
     ? items
     : items.filter(item => {
+        const q = searchQuery.toLowerCase();
+        if (selectedColumn === 'EAN') {
+          const ean1 = String(item.original_data?.['EAN'] ?? '').toLowerCase();
+          const ean2 = String(item.item_code ?? '').toLowerCase();
+          const ean3 = String((item.extra_data as any)?.['EANCorretto'] ?? '').toLowerCase();
+          return ean1.includes(q) || ean2.includes(q) || ean3.includes(q);
+        }
         const value = String(item.original_data?.[selectedColumn] ?? '');
         return value.toLowerCase().includes(searchQuery.toLowerCase());
       });
@@ -145,6 +152,13 @@ export default function LavorazioneScreen() {
     if (!trimmed) return;
     const currentItems = itemsRef.current;
     const matches = currentItems.filter(item => {
+      if (col === 'EAN') {
+        const q = trimmed.toLowerCase();
+        const ean1 = String(item.original_data?.['EAN'] ?? '').toLowerCase();
+        const ean2 = String(item.item_code ?? '').toLowerCase();
+        const ean3 = String((item.extra_data as any)?.['EANCorretto'] ?? '').toLowerCase();
+        return ean1.includes(q) || ean2.includes(q) || ean3.includes(q);
+      }
       const value = String(item.original_data?.[col] ?? '');
       return value.toLowerCase().includes(trimmed.toLowerCase());
     });
@@ -343,7 +357,7 @@ export default function LavorazioneScreen() {
           alignSelf: 'flex-start',
         }}
       >
-        {(['PkgID', 'LPN'] as ToggleColumn[]).map(col => {
+        {(['PkgID', 'LPN', 'EAN'] as ToggleColumn[]).map(col => {
           const isActive = selectedColumn === col;
           return (
             <TouchableOpacity
@@ -390,7 +404,7 @@ export default function LavorazioneScreen() {
             ref={searchInputRef}
             value={searchQuery}
             onChangeText={handleSearchChange}
-            placeholder="Inserisci codice..."
+            placeholder={selectedColumn === 'EAN' ? 'Cerca per EAN...' : selectedColumn === 'LPN' ? 'Cerca per LPN...' : 'Cerca per PkgID...'}
             placeholderTextColor={COLORS.textTertiary}
             style={{ fontSize: 14, color: COLORS.text, padding: 0 }}
             autoCorrect={false}
