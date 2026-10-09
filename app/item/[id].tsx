@@ -535,7 +535,13 @@ export default function ItemDetailScreen() {
     }
   }, [id, originalData, extraData, user, selectedCondition, altroText, selezione, prezzoVendita, skuVendita, selectedLotto, selectedLottoId, eanCorretto, asinCorretto, totalUnits, currentUnitIndex, processedUnits, item, showToast, router]);
 
-  const itemDesc = getOriginalField(originalData, 'ITEMDESC');
+  const itemDesc =
+    (originalData['Title'] as string | undefined) ??
+    (originalData['title'] as string | undefined) ??
+    getOriginalField(originalData, 'ITEMDESC') ??
+    item?.item_code ??
+    '';
+  console.log('[ItemDetail] itemDesc resolved:', itemDesc);
   const googleSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(itemDesc + ' prezzo')}`;
 
   // Filtered lotti for modal
