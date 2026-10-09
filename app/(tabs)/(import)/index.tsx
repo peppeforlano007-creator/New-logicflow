@@ -318,6 +318,13 @@ export default function ImportScreen() {
 
   const handleConfirmImport = useCallback(async () => {
     if (!selectedFile) return;
+
+    if (mappings.lpn === null) {
+      console.log('[Import] handleConfirmImport blocked — LPN column not mapped');
+      showToast('Seleziona almeno la colonna LPN prima di importare', 'error');
+      return;
+    }
+
     console.log('[Import] handleConfirmImport called', {
       fileName: selectedFile.name,
       importedBy,
@@ -401,6 +408,7 @@ export default function ImportScreen() {
           descrizione_column: mappings.descrizione,
           adjreason_column: mappings.adjreason,
           quantita_column: mappings.quantita,
+          unitrecovery_column: mappings.unitrecovery,
         })
         .select()
         .single();
@@ -949,6 +957,13 @@ export default function ImportScreen() {
               </View>
             </AnimatedPressable>
           </ScrollView>
+
+          <ToastMessage
+            message={toast.message}
+            type={toast.type}
+            visible={toast.visible}
+            onHide={hideToast}
+          />
         </View>
       </Modal>
 
@@ -1106,13 +1121,6 @@ export default function ImportScreen() {
           </ScrollView>
         </View>
       </Modal>
-
-      <ToastMessage
-        message={toast.message}
-        type={toast.type}
-        visible={toast.visible}
-        onHide={hideToast}
-      />
 
       {/* Delete Confirmation Modal */}
       <Modal

@@ -20,6 +20,7 @@ export interface SupplierFile {
   descrizione_column?: string | null;
   adjreason_column?: string | null;
   quantita_column?: string | null;
+  unitrecovery_column?: string | null;
 }
 
 export interface SupplierItem {
