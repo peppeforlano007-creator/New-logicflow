@@ -9,25 +9,13 @@ export default function TabLayout() {
 
   return (
     <NativeTabs>
-      <NativeTabs.Trigger name="(import)">
-        <Icon sf="arrow.down.doc.fill" />
-        <Label>Import</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="(ricezione)">
+      <NativeTabs.Trigger name="(fornitori)">
         <Icon sf="shippingbox.fill" />
-        <Label>Ricezione</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="(lavorazione)">
-        <Icon sf="wrench.fill" />
-        <Label>Lavorazione</Label>
+        <Label>Fornitori</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="(magazzino)">
         <Icon sf="shippingbox.and.arrow.backward.fill" />
         <Label>Magazzino</Label>
-      </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="(export)">
-        <Icon sf="arrow.up.doc.fill" />
-        <Label>Export</Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="(cassa)" tabBarItemStyle={hasCassa ? undefined : { display: 'none' }}>
         <Icon sf="cart.fill" />

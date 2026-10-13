@@ -131,6 +131,7 @@ export default function RootLayout() {
                   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                   <Stack.Screen name="login" options={{ headerShown: false }} />
                   <Stack.Screen name="admin" options={{ headerShown: false }} />
+                  <Stack.Screen name="fornitori" options={{ headerShown: false }} />
                   <Stack.Screen name="file/[id]" options={{ headerShown: true }} />
                   <Stack.Screen name="item/[id]" options={{ headerShown: true }} />
                   <Stack.Screen name="reception/[fileId]" options={{ headerShown: true }} />

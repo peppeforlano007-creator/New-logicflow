@@ -6,20 +6,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { COLORS } from '@/constants/AppColors';
 
 const ALL_TABS: TabBarItem[] = [
-  { name: '(import)', route: '/(tabs)/(import)' as any, icon: 'file-download', label: 'Import' },
-  { name: '(ricezione)', route: '/(tabs)/(ricezione)' as any, icon: 'inventory', label: 'Ricezione' },
-  { name: '(lavorazione)', route: '/(tabs)/(lavorazione)' as any, icon: 'build', label: 'Lavorazione' },
+  { name: '(fornitori)', route: '/(tabs)/(fornitori)' as any, icon: 'local-shipping', label: 'Fornitori' },
   { name: '(magazzino)', route: '/(tabs)/(magazzino)' as any, icon: 'inventory-2', label: 'Magazzino' },
-  { name: '(export)', route: '/(tabs)/(export)' as any, icon: 'file-upload', label: 'Export' },
   { name: '(cassa)', route: '/(tabs)/(cassa)' as any, icon: 'shopping-cart', label: 'Cassa' },
 ];
 
 const PERMISSION_MAP: Record<string, string> = {
-  '(import)': 'import',
-  '(ricezione)': 'ricezione',
-  '(lavorazione)': 'lavorazione',
   '(magazzino)': 'magazzino',
-  '(export)': 'export',
   '(cassa)': 'cassa',
 };
 
@@ -68,6 +61,7 @@ export default function TabLayout() {
       </View>
 
       <Stack screenOptions={{ headerShown: false, animation: 'none' }}>
+        <Stack.Screen name="(fornitori)" />
         <Stack.Screen name="(import)" />
         <Stack.Screen name="(ricezione)" />
         <Stack.Screen name="(lavorazione)" />
