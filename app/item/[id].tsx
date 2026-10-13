@@ -54,6 +54,7 @@ type UnitData = {
   Selezione: 'A' | 'B' | 'C' | '';
   PrezzoVendita: string;
   AdjReason: string;
+  DisputeReason: string;
   SKU: string;
   Lotto: string;
   LottoId: string;
@@ -245,14 +246,18 @@ export default function ItemDetailScreen() {
 
       // Pre-select AdjReason condition from loaded data
       const adjValue: string = fetchedItem.original_data?.['AdjReason'] ?? '';
+      const disputeValue: string = (fetchedItem.extra_data as any)?.['DisputeReason'] ?? '';
       if (adjValue === '') {
         setSelectedCondition(null);
         setAltroText('');
       } else if ((FIXED_VALUES as readonly string[]).includes(adjValue)) {
         setSelectedCondition(adjValue);
         setAltroText('');
+      } else if (adjValue === 'other') {
+        setSelectedCondition('other');
+        setAltroText(disputeValue); // ripristina il testo libero da DisputeReason
       } else {
-        // Non-empty value that doesn't match a fixed condition → ALTRO with free text
+        // Vecchi dati salvati con testo libero direttamente in AdjReason — compatibilità backward
         setSelectedCondition('other');
         setAltroText(adjValue);
       }
@@ -470,13 +475,13 @@ export default function ItemDetailScreen() {
       if (selectedCondition === null || selectedCondition === 'no issue') {
         adjReason = '';
       } else if (selectedCondition === 'other') {
-        adjReason = altroText.trim();
+        adjReason = 'other'; // fixed string; free text goes to extra_data.DisputeReason
       } else {
         adjReason = selectedCondition;
       }
 
       const updatedOriginalData = { ...originalData, AdjReason: adjReason };
-      console.log('[ItemDetail] saving AdjReason:', adjReason);
+      console.log('[ItemDetail] saving AdjReason:', adjReason, '| DisputeReason:', selectedCondition === 'other' ? altroText.trim() : '');
 
       const updatedExtraData = {
         ...extraData,
@@ -487,6 +492,7 @@ export default function ItemDetailScreen() {
         LottoId: selectedLottoId ?? '',
         EANCorretto: eanCorretto,
         ASINCorretto: asinCorretto,
+        DisputeReason: selectedCondition === 'other' ? altroText.trim() : '',
       };
 
       if (totalUnits > 1) {
@@ -505,7 +511,8 @@ export default function ItemDetailScreen() {
             if (u.unitIndex !== editingUnitIndex) return u;
             return {
               ...u,
-              AdjReason: selectedCondition ?? u.AdjReason,
+              AdjReason: adjReason,
+              DisputeReason: selectedCondition === 'other' ? altroText.trim() : '',
               Selezione: selezione ?? u.Selezione,
               PrezzoVendita: prezzoVendita || u.PrezzoVendita,
               SKU: skuVendita || u.SKU,
@@ -548,6 +555,7 @@ export default function ItemDetailScreen() {
           Selezione: selezione ?? '',
           PrezzoVendita: prezzoVendita,
           AdjReason: adjReason,
+          DisputeReason: selectedCondition === 'other' ? altroText.trim() : '',
           SKU: skuVendita,
           Lotto: selectedLotto?.codice_lotto ?? '',
           LottoId: selectedLottoId ?? '',
