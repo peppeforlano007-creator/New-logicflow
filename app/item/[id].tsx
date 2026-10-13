@@ -485,6 +485,7 @@ export default function ItemDetailScreen() {
 
       const updatedExtraData = {
         ...extraData,
+        AdjReason: '', // azzera il campo legacy in extra_data (il valore corretto è in original_data)
         Selezione: selezione ?? '',
         PrezzoVendita: prezzoVendita,
         SKU: skuVendita,
